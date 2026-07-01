@@ -1,0 +1,13 @@
+{
+  "stage_model": "Z925",
+  "travel_mm": 25,
+  "pylablib_scale": "Z825",
+  "pylablib_scale_note": "pylablib has no Z825 entry; Z825 is the 25 mm travel scale used for similar stages. If Kinesis mm readout disagrees with Python moves, measure travel and set pylablib_scale to 'step' and use encoder --start/--stop/--step only.",
+  "kinesis": {
+    "max_velocity_mm_s": 0.01,
+    "return_velocity_mm_s": 2.2,
+    "return_velocity_note": "Used only after continuous-scan: K-Cube max speed for move back to start (matches typical Kinesis jog; faster than FTS crawl).",
+    "jog_step_mm": 0.1,
+    "acceleration_mm_s2": 1.5
+  }
+}

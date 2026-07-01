@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Local runtime data (per machine — laptop/desktop layouts stay separate)
+user_config/
+user_config/tile_layout.json
+user_config/tile_layout.log
+user_config/app_config.json
+data/
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini

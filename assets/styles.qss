@@ -1,0 +1,121 @@
+/* Interferometer Automation — neon holographic theme */
+
+QMainWindow {
+    background: transparent;
+}
+
+QWidget {
+    background: transparent;
+    color: #f8fbff;
+    font-family: "Segoe UI", "Consolas", sans-serif;
+}
+
+QComboBox, QLineEdit, QDoubleSpinBox, QSpinBox {
+    background: rgba(20, 10, 40, 0.65);
+    border: 1px solid rgba(168, 85, 247, 0.55);
+    border-radius: 6px;
+    padding: 5px 10px;
+    color: #f8fbff;
+    selection-background-color: #ec4899;
+    selection-color: #ffffff;
+}
+
+QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus {
+    border: 1px solid #00f5ff;
+    background: rgba(15, 25, 55, 0.8);
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 18px;
+}
+
+QRadioButton {
+    color: #e2e8f0;
+    spacing: 8px;
+}
+
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    border: 1px solid rgba(244, 114, 182, 0.6);
+    background: rgba(15, 10, 30, 0.7);
+}
+
+QRadioButton::indicator:checked {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #a855f7, stop:1 #f472b6);
+    border: 1px solid #00f5ff;
+}
+
+QCheckBox {
+    color: #f472b6;
+}
+
+QCheckBox::indicator:checked {
+    background: #a855f7;
+    border: 1px solid #00f5ff;
+}
+
+QScrollBar:vertical {
+    background: rgba(15, 10, 30, 0.5);
+    width: 10px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f472b6, stop:1 #3b82ff);
+    border-radius: 4px;
+    min-height: 24px;
+}
+
+QMessageBox {
+    background-color: #120a22;
+    color: #f8fbff;
+}
+
+QSplitter::handle {
+    background: rgba(168, 85, 247, 0.2);
+    width: 5px;
+    height: 5px;
+}
+
+QSplitter::handle:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f472b6, stop:0.5 #a855f7, stop:1 #00f5ff);
+}
+
+QLabel {
+    color: #e2e8f0;
+}
+
+QTextEdit, QPlainTextEdit {
+    background: rgba(12, 8, 28, 0.6);
+    border: 1px solid rgba(244, 114, 182, 0.45);
+    border-radius: 6px;
+    color: #f8fbff;
+    padding: 6px;
+}
+
+QTextEdit:focus, QPlainTextEdit:focus {
+    border: 1px solid #00f5ff;
+}
+
+QMenuBar {
+    background: transparent;
+    color: #cbd5e1;
+}
+
+QMenuBar::item:selected {
+    background: rgba(168, 85, 247, 0.35);
+    color: #00f5ff;
+}
+
+QMenu {
+    background: rgba(12, 8, 28, 0.95);
+    color: #f8fbff;
+    border: 1px solid #f472b6;
+}
+
+QMenu::item:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(168,85,247,0.6), stop:1 rgba(244,114,182,0.5));
+}
