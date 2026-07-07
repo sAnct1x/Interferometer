@@ -16,14 +16,28 @@ def _ensure_legacy_path() -> None:
 
 
 def list_cameras() -> list[str]:
-    """Return serial number strings of all connected TLCam cameras."""
+    """Return serial number strings of all connected TLCam cameras.
+
+    ``Thorlabs.list_cameras_tlcam()`` has returned different shapes across
+    pylablib versions: a flat list of serial strings on some, a list of
+    ``(serial, model)`` tuples on others. Handle both so enumeration never
+    silently comes back empty due to an unpacking mismatch.
+    """
     _ensure_legacy_path()
     try:
         from pylablib.devices import Thorlabs
 
-        return [str(s) for s, _ in Thorlabs.list_cameras_tlcam()]
+        raw = Thorlabs.list_cameras_tlcam()
     except Exception:
         return []
+
+    serials: list[str] = []
+    for entry in raw:
+        if isinstance(entry, (tuple, list)):
+            serials.append(str(entry[0]))
+        else:
+            serials.append(str(entry))
+    return serials
 
 
 def connect_camera(serial: str | None = None) -> Any | None:

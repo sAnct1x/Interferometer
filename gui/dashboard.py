@@ -24,6 +24,7 @@ from core.analytics.coupling import coupling_overlay, default_target_center
 from core.analytics.efficiency import coupling_efficiency_percent, dual_camera_efficiency_percent
 from core.analytics.interferometer import recover_wavelength_from_csv
 from core.camera_worker import CameraWorker
+from core.hardware_bridge import list_cameras
 from core.snap_worker import SnapWorker
 from core.simulation.frame_generator import SimulationFrameGenerator, make_simulation_frame
 from core.simulation_worker import SimulationWorker
@@ -163,6 +164,7 @@ class Dashboard(QMainWindow):
             self._camera_panel.set_camera_label(i, slot.label)
             if slot.serial:
                 self._camera_panel.set_camera_serial(i, slot.serial)
+        self._refresh_available_cameras()
 
         self.setStyleSheet(
             "QMainWindow::separator { background: transparent; width: 2px; height: 2px; }"
@@ -197,6 +199,7 @@ class Dashboard(QMainWindow):
         self._camera_worker_b: CameraWorker | None = None
         self._camera_live = False
         self._camera_live_b = False
+        self._camera_a_actual_serial: str | None = None
         # Live acquisition is paused when the Live Camera tile is hidden/minimized and
         # auto-resumed when it is shown again (see _on_camera_tile_visibility).
         self._camera_resume_on_show = False
@@ -872,6 +875,8 @@ class Dashboard(QMainWindow):
         self._camera_panel.camera_settings_changed.connect(self._on_camera_settings_changed)
         self._camera_panel.layout_mode_changed.connect(self._on_camera_layout_changed)
         self._camera_panel.camera_label_changed.connect(self._on_camera_label_changed)
+        self._camera_panel.camera_selection_changed.connect(self._on_camera_selection_changed)
+        self._camera_panel.refresh_cameras_requested.connect(self._refresh_available_cameras)
         self._roi_snapshot_panel.roi_changed.connect(self._on_roi_snapshot_changed)
         self._roi_snapshot_panel.capture_requested.connect(self._save_current_roi)
         self._roi_snapshot_panel.analyze_requested.connect(self._on_analyze_snapshot)
@@ -981,7 +986,7 @@ class Dashboard(QMainWindow):
         self._camera_worker.frame_ready.connect(self._on_frame, Qt.ConnectionType.QueuedConnection)
         self._camera_worker.error.connect(self._on_camera_error)
         self._camera_worker.status.connect(self._on_camera_status)
-        self._camera_worker.connected.connect(lambda _s: self._refresh_status(camera="Active"))
+        self._camera_worker.connected.connect(self._on_camera_a_connected)
         self._camera_worker.settings_updated.connect(self._on_camera_settings_updated)
         self._defer_screen_refit_until = time.time() + 5.0
         self._camera_worker.start()
@@ -989,12 +994,30 @@ class Dashboard(QMainWindow):
         if serial_a:
             self._camera_panel.set_camera_serial(0, serial_a)
 
+    def _on_camera_a_connected(self, serial: str) -> None:
+        # Record the actual connected serial (useful when the slot was left on "Auto")
+        # so the device pickers can exclude it from Camera B's choices.
+        self._camera_a_actual_serial = serial
+        self._camera_panel.set_camera_serial(0, serial)
+        self._refresh_status(camera="Active")
+
     def _start_camera_b(self) -> None:
         if self._simulation_active or not self._camera_live:
             return
         if self._camera_worker_b is not None and self._camera_worker_b.isRunning():
             return
         serial_b = self._cfg.cameras[1].serial if len(self._cfg.cameras) > 1 else None
+        if not serial_b:
+            # Auto mode: avoid silently opening the same physical camera as slot A.
+            serial_a_actual = getattr(self, "_camera_a_actual_serial", None) or (
+                self._cfg.cameras[0].serial if self._cfg.cameras else None
+            )
+            try:
+                candidates = [s for s in list_cameras() if s != serial_a_actual]
+            except Exception:
+                candidates = []
+            if candidates:
+                serial_b = candidates[0]
         self._camera_worker_b = CameraWorker(serial_b, self)
         self._camera_worker_b.frame_ready.connect(
             self._on_frame_b, Qt.ConnectionType.QueuedConnection
@@ -1023,9 +1046,10 @@ class Dashboard(QMainWindow):
         self._live_display_last_t_b = 0.0
         self._refresh_status()
 
-    def _on_camera_b_connected(self, _serial: str) -> None:
+    def _on_camera_b_connected(self, serial: str) -> None:
         """Auto-switch the camera tile to Side-by-Side once Camera B is live."""
         from gui.widgets.camera_view import LayoutMode
+        self._camera_panel.set_camera_serial(1, serial)
         if self._camera_panel.current_layout() == LayoutMode.INPUT_ONLY:
             self._camera_panel.set_layout_mode(LayoutMode.SIDE_BY_SIDE)
         self._refresh_status()
@@ -1130,6 +1154,35 @@ class Dashboard(QMainWindow):
         if cam_idx < len(self._cfg.cameras):
             self._cfg.cameras[cam_idx].label = label
             save_config(self._cfg)
+
+    def _refresh_available_cameras(self) -> None:
+        """Rescan connected Thorcams and refresh both device pickers in the camera tile."""
+        try:
+            serials = list_cameras()
+        except Exception:
+            serials = []
+        self._camera_panel.set_available_cameras(serials)
+
+    def _on_camera_selection_changed(self, cam_idx: int, serial: str) -> None:
+        """User picked a specific physical camera (by serial) for slot A or B."""
+        serial = serial or None
+        other_idx = 1 - cam_idx
+        # Defensive: never let both slots point at the same physical camera.
+        if serial and len(self._cfg.cameras) > other_idx and self._cfg.cameras[other_idx].serial == serial:
+            self._cfg.cameras[other_idx].serial = None
+        if cam_idx >= len(self._cfg.cameras):
+            return
+        self._cfg.cameras[cam_idx].serial = serial
+        save_config(self._cfg)
+        self._camera_panel.set_camera_serial(cam_idx, serial or "")
+        # Reconnect the affected worker on the fly if it's currently live.
+        if cam_idx == 0 and self._camera_live and not self._simulation_active:
+            self._stop_camera()
+            self._start_camera()
+        elif cam_idx == 1 and self._camera_live_b:
+            self._stop_camera_b()
+            self._start_camera_b()
+        self._refresh_status()
 
     def _process_frame(self, frame: np.ndarray) -> None:
         now = time.time()

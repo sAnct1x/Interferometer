@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QVBoxLayout,
     QLabel,
+    QComboBox,
+    QDoubleSpinBox,
+    QSpinBox,
 )
 
 from gui.glass_panel import GlassPanel, PanelHeader
@@ -271,7 +274,13 @@ class HubTile(QWidget):
                 continue
             if getattr(child, "_chat_message", False) or getattr(child, "_chat_scroll", False):
                 continue
-            if isinstance(child, (QLineEdit, QPushButton, QCheckBox, QTextEdit, QPlainTextEdit, QLabel)):
+            if isinstance(
+                child,
+                (
+                    QLineEdit, QPushButton, QCheckBox, QTextEdit, QPlainTextEdit, QLabel,
+                    QComboBox, QDoubleSpinBox, QSpinBox,
+                ),
+            ):
                 continue
             composer_footer = getattr(widget, "_composer_footer", None)
             if composer_footer is not None and (

@@ -449,9 +449,11 @@ class CameraView(GlassPanel):
     snapshot_captured = Signal(object)
     snap_requested = Signal()
     live_feed_toggled = Signal(bool)
-    camera_settings_changed = Signal(object)  # dict; includes "cam_idx": 0|1
-    layout_mode_changed = Signal(str)          # LayoutMode value
-    camera_label_changed = Signal(int, str)    # (cam_idx, new_label)
+    camera_settings_changed = Signal(object)      # dict; includes "cam_idx": 0|1
+    layout_mode_changed = Signal(str)             # LayoutMode value
+    camera_label_changed = Signal(int, str)       # (cam_idx, new_label)
+    camera_selection_changed = Signal(int, str)   # (cam_idx, serial or "" for auto)
+    refresh_cameras_requested = Signal()
 
     _DEFAULT_CAM_STATE: dict = {
         "exposure_us": 10_000.0, "fps_auto": True, "fps_hz": 30.0,
@@ -475,6 +477,8 @@ class CameraView(GlassPanel):
         self._cam_state: list[dict] = [
             dict(self._DEFAULT_CAM_STATE), dict(self._DEFAULT_CAM_STATE)
         ]
+        self._assigned_serial: list[str | None] = [None, None]
+        self._available_serials: list[str] = []
 
         layout = QVBoxLayout(self)
         inset = self.content_margins()
@@ -503,6 +507,10 @@ class CameraView(GlassPanel):
         r1.addWidget(self._mode_combo)
 
         r1.addStretch()
+        self._refresh_cams_btn = PentagonButton("⟳ Cameras", compact=True)
+        self._refresh_cams_btn.setToolTip("Rescan for connected cameras")
+        self._refresh_cams_btn.clicked.connect(self.refresh_cameras_requested)
+        r1.addWidget(self._refresh_cams_btn)
         self._live_btn = PentagonButton("Start Live Feed", compact=True)
         self._live_btn.clicked.connect(self._on_live_clicked)
         r1.addWidget(self._live_btn)
@@ -599,18 +607,51 @@ class CameraView(GlassPanel):
         self._live_viewport = OctagonalViewport()   # Camera A — backward-compat name kept
         self._viewport_b = OctagonalViewport()       # Camera B
 
+        self._cam_a_serial_combo = QComboBox()
+        self._cam_a_serial_combo.setStyleSheet(_FIELD_STYLE)
+        self._cam_a_serial_combo.setMinimumWidth(96)
+        self._cam_a_serial_combo.setToolTip("Pick which physical camera feeds this slot")
+        self._cam_a_serial_combo.currentIndexChanged.connect(
+            lambda _i: self._on_serial_combo_changed(0)
+        )
+        self._cam_b_serial_combo = QComboBox()
+        self._cam_b_serial_combo.setStyleSheet(_FIELD_STYLE)
+        self._cam_b_serial_combo.setMinimumWidth(96)
+        self._cam_b_serial_combo.setToolTip("Pick which physical camera feeds this slot")
+        self._cam_b_serial_combo.currentIndexChanged.connect(
+            lambda _i: self._on_serial_combo_changed(1)
+        )
+
         self._pane_a = QWidget()
         pa = QVBoxLayout(self._pane_a)
         pa.setContentsMargins(0, 0, 0, 0)
         pa.setSpacing(2)
-        pa.addWidget(self._label_a)
+        head_a = QHBoxLayout()
+        head_a.setContentsMargins(0, 0, 0, 0)
+        head_a.setSpacing(6)
+        head_a.addWidget(self._label_a)
+        cam_a_lbl = QLabel("Cam:")
+        cam_a_lbl.setStyleSheet(muted_style())
+        head_a.addWidget(cam_a_lbl)
+        head_a.addWidget(self._cam_a_serial_combo)
+        head_a.addStretch()
+        pa.addLayout(head_a)
         pa.addWidget(self._live_viewport, stretch=1)
 
         self._pane_b = QWidget()
         pb = QVBoxLayout(self._pane_b)
         pb.setContentsMargins(0, 0, 0, 0)
         pb.setSpacing(2)
-        pb.addWidget(self._label_b)
+        head_b = QHBoxLayout()
+        head_b.setContentsMargins(0, 0, 0, 0)
+        head_b.setSpacing(6)
+        head_b.addWidget(self._label_b)
+        cam_b_lbl = QLabel("Cam:")
+        cam_b_lbl.setStyleSheet(muted_style())
+        head_b.addWidget(cam_b_lbl)
+        head_b.addWidget(self._cam_b_serial_combo)
+        head_b.addStretch()
+        pb.addLayout(head_b)
         pb.addWidget(self._viewport_b, stretch=1)
 
         vp_layout = QHBoxLayout()
@@ -622,6 +663,8 @@ class CameraView(GlassPanel):
 
         self._update_layout_visibility()
         self._select_settings_cam(0, _refresh_ui=False)
+        self._rebuild_serial_combo(self._cam_a_serial_combo, 0)
+        self._rebuild_serial_combo(self._cam_b_serial_combo, 1)
         self.show_idle()
 
     # ── Layout management ────────────────────────────────────────────────────
@@ -693,12 +736,56 @@ class CameraView(GlassPanel):
             self._label_b.set_text(label)
 
     def set_camera_serial(self, cam_idx: int, serial: str) -> None:
+        self._assigned_serial[cam_idx] = serial or None
         if cam_idx == 0:
             self._label_a.set_serial(serial)
             self._cam_a_btn.setToolTip(f"Serial: {serial}")
         else:
             self._label_b.set_serial(serial)
             self._cam_b_btn.setToolTip(f"Serial: {serial}")
+        self._rebuild_serial_combo(self._cam_a_serial_combo, 0)
+        self._rebuild_serial_combo(self._cam_b_serial_combo, 1)
+
+    # ── Physical camera picker (which serial feeds slot A / B) ─────────────────
+
+    def set_available_cameras(self, serials: list[str]) -> None:
+        """Refresh both device pickers with the currently detected camera serials."""
+        self._available_serials = list(serials)
+        self._rebuild_serial_combo(self._cam_a_serial_combo, 0)
+        self._rebuild_serial_combo(self._cam_b_serial_combo, 1)
+
+    def _rebuild_serial_combo(self, combo: QComboBox, cam_idx: int) -> None:
+        other_idx = 1 - cam_idx
+        other_serial = self._assigned_serial[other_idx]
+        current_serial = self._assigned_serial[cam_idx]
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Auto (first found)", "")
+        for s in self._available_serials:
+            combo.addItem(s, s)
+        idx = 0
+        if current_serial:
+            found = combo.findData(current_serial)
+            if found < 0:
+                combo.addItem(current_serial, current_serial)
+                found = combo.count() - 1
+            idx = found
+        combo.setCurrentIndex(idx)
+        if other_serial:
+            dup_idx = combo.findData(other_serial)
+            if dup_idx >= 0 and dup_idx != idx:
+                item = combo.model().item(dup_idx)
+                if item is not None:
+                    item.setEnabled(False)
+        combo.blockSignals(False)
+
+    def _on_serial_combo_changed(self, cam_idx: int) -> None:
+        combo = self._cam_a_serial_combo if cam_idx == 0 else self._cam_b_serial_combo
+        serial = combo.currentData() or ""
+        self._assigned_serial[cam_idx] = serial or None
+        self._rebuild_serial_combo(self._cam_a_serial_combo, 0)
+        self._rebuild_serial_combo(self._cam_b_serial_combo, 1)
+        self.camera_selection_changed.emit(cam_idx, serial)
 
     # ── Live state ───────────────────────────────────────────────────────────
 
