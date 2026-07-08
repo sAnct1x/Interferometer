@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from gui.neon_theme import (
+    MUTED_BORDER_35,
     NEON_PINK,
     NEON_PURPLE,
+    PURPLE_FILL_15,
     TEXT_HINT,
     TEXT_MUTED,
     TEXT_PRIMARY,
@@ -75,8 +77,8 @@ def section_style(color: str = TEXT_MUTED, scale: float | None = None) -> str:
 def callout_style(scale: float | None = None) -> str:
     return (
         value_style(TEXT_PRIMARY, scale) + " font-weight: bold; "
-        f"background: rgba(168,85,247,0.15); padding: 5px 8px; "
-        f"border: 1px solid rgba(148,163,184,0.35); border-radius: 6px;"
+        f"background: {PURPLE_FILL_15}; padding: 5px 8px; "
+        f"border: 1px solid {MUTED_BORDER_35}; border-radius: 6px;"
     )
 
 

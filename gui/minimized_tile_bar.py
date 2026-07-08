@@ -20,8 +20,9 @@ from gui.neon_theme import (
     MINIMIZED_CHIP_OVERLAY_ALPHA,
     draw_neon_border,
 )
-from gui.glass_panel import octagon_path
+from gui.glass_panel import panel_path
 from gui.typography import primary_style, TEXT_PRIMARY
+from gui.ui_scale import minimized_bar_height
 
 
 class MinimizedTileChip(QWidget):
@@ -78,7 +79,7 @@ class MinimizedTileChip(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
-        path = octagon_path(rect, chamfer=10)
+        path = panel_path(rect, chamfer=10)
         painter.fillPath(path, glass_fill_gradient(rect, path))
         painter.fillPath(path, QColor(8, 14, 32, MINIMIZED_CHIP_OVERLAY_ALPHA))
         draw_neon_border(painter, path, width=1)
@@ -90,14 +91,16 @@ class MinimizedTileBar(QWidget):
     restore_requested = Signal(str)
     close_requested = Signal(str)
 
-    BAR_HEIGHT = 52
-
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedHeight(self.BAR_HEIGHT)
+        self.setFixedHeight(minimized_bar_height())
         self._order: list[str] = []
         self._chips: dict[str, MinimizedTileChip] = {}
+
+    def apply_ui_scale(self, scale: float | None = None) -> None:
+        """Rescale the dock height; called by Dashboard alongside every other chrome surface."""
+        self.setFixedHeight(minimized_bar_height(scale))
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(8, 2, 8, 2)

@@ -1,4 +1,4 @@
-"""Octagonal clips, glow borders, and bracket-frame action buttons for the holographic UI."""
+"""Rounded glass panels, glow borders, and bracket-frame action buttons for the holographic UI."""
 
 from __future__ import annotations
 
@@ -6,16 +6,19 @@ from PySide6.QtCore import Qt, QRect, QRectF, QSize
 from PySide6.QtGui import QBrush, QPainter, QPainterPath, QPen, QColor, QFont, QLinearGradient, QFontMetrics
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget, QSizePolicy
 
-from config import OCTAGON_CHAMFER_PX, PANEL_CORNER_RADIUS_PX
+from config import PANEL_CHAMFER_PX, PANEL_CORNER_RADIUS_PX
 from gui.hex_geometry import tile_panel_path
 from gui.typography import panel_title_stylesheet, body_pt, TEXT_PRIMARY, TEXT_MUTED
 from gui.neon_theme import (
+    ACCENT_SYSTEM,
     COLOR_CYAN,
     COLOR_MAGENTA,
     COLOR_PINK,
     COLOR_PURPLE,
+    draw_corner_ticks,
     draw_multicolor_glow,
     draw_neon_border,
+    draw_panel_texture,
     glass_fill_gradient,
     PANEL_HEADER_ALPHA,
     tile_dark_overlay,
@@ -131,12 +134,9 @@ class PanelHeader(QWidget):
             self._update_maximize_button(is_maximized(self._window))
 
 
-def octagon_path(rect, chamfer: int = OCTAGON_CHAMFER_PX) -> QPainterPath:
-    """Rounded-rectangle silhouette. ``chamfer`` now sets the corner radius.
-
-    Name and signature are preserved so existing chrome/telemetry/minimized-bar
-    call sites keep working while rendering as clean curved panels.
-    """
+def panel_path(rect, chamfer: int = PANEL_CHAMFER_PX) -> QPainterPath:
+    """Rounded-rectangle silhouette used by chrome bars, telemetry chips, and the
+    minimized-tile bar. ``chamfer`` sets the corner radius."""
     r = QRectF(rect)
     corner = min(float(chamfer), r.width() / 4.0, r.height() / 4.0)
     path = QPainterPath()
@@ -152,7 +152,7 @@ def smooth_viewport_path(rect: QRectF, radius: float = 8.0) -> QPainterPath:
     return path
 
 
-def hub_workspace_path(rect, chamfer: int = OCTAGON_CHAMFER_PX) -> QPainterPath:
+def hub_workspace_path(rect, chamfer: int = PANEL_CHAMFER_PX) -> QPainterPath:
     """Main hub workspace silhouette. Fully rounded to match tile panels."""
     if hasattr(rect, "toRectF"):
         r = rect.toRectF()
@@ -162,23 +162,6 @@ def hub_workspace_path(rect, chamfer: int = OCTAGON_CHAMFER_PX) -> QPainterPath:
     c = min(float(chamfer), w / 4.0, h / 4.0)
     path = QPainterPath()
     path.addRoundedRect(QRectF(x, y, w, h), c, c)
-    return path
-
-
-def pentagon_path(rect) -> QPainterPath:
-    path = QPainterPath()
-    cx = rect.center().x()
-    top = rect.top() + 4
-    bottom = rect.bottom() - 4
-    left = rect.left() + 8
-    right = rect.right() - 8
-    mid_y = (top + bottom) / 2
-    path.moveTo(cx, top)
-    path.lineTo(right, mid_y - 8)
-    path.lineTo(right - 10, bottom)
-    path.lineTo(left + 10, bottom)
-    path.lineTo(left, mid_y - 8)
-    path.closeSubpath()
     return path
 
 
@@ -370,18 +353,21 @@ class BracketButton(QPushButton):
         )
 
 
-# Used across hub tiles (Start Live Feed, Save ROI, Calibrate, etc.).
-PentagonButton = BracketButton
-
-
 class GlassPanel(QWidget):
-    """Translucent hex tile panel with pink/purple/cyan neon glow."""
+    """Translucent rounded glass tile panel with a neon rim and a semantic accent."""
 
-    def __init__(self, parent=None, *, title: str = "", interlock_phase: int = 0, shape: str = "rounded") -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        title: str = "",
+        shape: str = "rounded",
+        accent: QColor | None = None,
+    ) -> None:
         super().__init__(parent)
         self._title = title
-        self._interlock_phase = interlock_phase
         self._shape = shape
+        self._accent = accent if accent is not None else ACCENT_SYSTEM
         self._header: PanelHeader | None = PanelHeader(title, self) if title else None
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -392,25 +378,22 @@ class GlassPanel(QWidget):
             self.setMinimumHeight(min_h)
 
     def _content_inset(self) -> int:
-        """Scale-aware margin that clears the rounded panel border without octagon-era padding."""
+        """Scale-aware margin that clears the rounded panel border."""
         from gui.ui_scale import px
 
         return max(8, px(int(PANEL_CORNER_RADIUS_PX * 0.5 + 2)))
-
-    def set_interlock_phase(self, phase: int) -> None:
-        self._interlock_phase = phase % 2
-        self.update()
 
     def set_tile_shape(self, shape: str) -> None:
         self._shape = shape
         self.update()
 
+    def set_accent(self, color: QColor) -> None:
+        """Semantic accent for this panel's corner ticks (see accent_for_tile())."""
+        self._accent = color
+        self.update()
+
     def _panel_path(self, rect) -> QPainterPath:
-        return tile_panel_path(
-            QRectF(rect),
-            shape=self._shape,
-            phase=self._interlock_phase,
-        )
+        return tile_panel_path(QRectF(rect), shape=self._shape)
 
     def header_widget(self) -> PanelHeader | None:
         return self._header
@@ -458,6 +441,7 @@ class GlassPanel(QWidget):
         draw_multicolor_glow(painter, path)
         painter.fillPath(path, glass_fill_gradient(rect, path))
         painter.fillPath(path, tile_dark_overlay())
+        draw_panel_texture(painter, path, rect)
 
         inner = self._panel_path(rect.adjusted(5, 5, -5, -5))
         shimmer = QPen(QColor(244, 114, 182, 55), 1)
@@ -465,4 +449,5 @@ class GlassPanel(QWidget):
         painter.drawPath(inner)
 
         draw_neon_border(painter, path, width=2)
+        draw_corner_ticks(painter, rect.adjusted(4, 4, -4, -4), self._accent)
 

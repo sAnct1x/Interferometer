@@ -78,6 +78,11 @@ class AppConfig:
     camera_serial: str | None = None  # kept for one-time migration only
     layout_version: int = 0
     ui_display_preset: str = "auto"
+    # Remembers which monitor/position the main window was last closed on, so
+    # relaunching doesn't always dump you back on the primary display.
+    window_screen_name: str | None = None
+    window_geometry: tuple[int, int, int, int] | None = None
+    window_maximized: bool = True
 
     def camera_by_role(self, role) -> CameraSlot | None:
         """Return the camera slot bound to ``role`` (accepts CameraRole or str)."""
@@ -189,6 +194,11 @@ def load_config() -> AppConfig:
         camera_serial=data.get("camera_serial"),
         layout_version=int(data.get("layout_version", 0)),
         ui_display_preset=str(data.get("ui_display_preset", "auto")),
+        window_screen_name=data.get("window_screen_name"),
+        window_geometry=(
+            tuple(data["window_geometry"]) if data.get("window_geometry") else None
+        ),
+        window_maximized=bool(data.get("window_maximized", True)),
     )
 
 
@@ -228,6 +238,9 @@ def save_config(cfg: AppConfig) -> None:
         ),
         "layout_version": cfg.layout_version,
         "ui_display_preset": cfg.ui_display_preset,
+        "window_screen_name": cfg.window_screen_name,
+        "window_geometry": list(cfg.window_geometry) if cfg.window_geometry else None,
+        "window_maximized": cfg.window_maximized,
     }
     _config_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

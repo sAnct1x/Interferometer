@@ -43,7 +43,7 @@ from gui.hub_tile import HubTile, NON_SNAPPING_TILES
 from gui.tile_layout import TileLayoutController
 from gui.minimized_tile_bar import MinimizedTileBar
 from gui.widgets.toast import ToastOverlay
-from gui.wireframe_rail import HexRailOverlay
+from gui.wireframe_rail import NetworkRail
 from gui.widgets.ai_terminal import AtriaPanel
 from gui.widgets.beam_plots import BeamPlotsPanel
 from gui.widgets.camera_view import CameraView, PopoutCameraPanel, RoiMode
@@ -56,6 +56,7 @@ from gui.widgets.roi_snapshot_panel import RoiSnapshotPanel
 from gui.widgets.workspace_panel import WorkspacePanel
 from gui.windows.tool_windows import (
     FftDiagnosticsPanel,
+    LearnReferencePanel,
     PiezoOptimizerPanel,
     TaskManagerPanel,
 )
@@ -85,6 +86,11 @@ TOOLS_MENU_TILES: tuple[tuple[str, str], ...] = (
     ("tasks", "Atria Task Manager"),
 )
 
+# Help menu: optional hub tiles (hidden until opened from menu).
+HELP_MENU_TILES: tuple[tuple[str, str], ...] = (
+    ("learn", "Learn: Physics & Bench Reference"),
+)
+
 
 class Dashboard(QMainWindow):
     TILE_SPECS: dict[str, str] = {
@@ -98,6 +104,7 @@ class Dashboard(QMainWindow):
         "piezo": "Piezo Alignment Optimizer",
         "fft": "Coupling Efficiency FFT",
         "tasks": "Atria Task Manager",
+        "learn": "Learn: Physics & Bench Reference",
         "atria": "Atria",
         "workspace": "Workspace",
         "cam_far_field": "Far Field Camera",
@@ -174,6 +181,7 @@ class Dashboard(QMainWindow):
         }
         self._fft_panel = FftDiagnosticsPanel()
         self._tasks_panel = TaskManagerPanel()
+        self._learn_panel = LearnReferencePanel()
         self._ai_panel = AtriaPanel()
         self._workspace_panel = WorkspacePanel()
 
@@ -203,12 +211,19 @@ class Dashboard(QMainWindow):
         self.setCentralWidget(workspace)
         self._workspace = workspace
 
-        self._hex_rail = HexRailOverlay(self)
+        self._network_rail = NetworkRail(self)
         self._min_tile_bar = MinimizedTileBar(self)
         self._min_tile_bar.restore_requested.connect(self.restore_tile_from_bar)
         self._min_tile_bar.close_requested.connect(self._close_tile_from_bar)
         self._min_tile_bar.hide()
         self._toast = ToastOverlay(self)
+
+        # Left-rail brightness pulse: rises while Atria is thinking or a
+        # simulation is running, so the rail reads as alive, not decorative.
+        self._activity_sources: dict[str, float] = {}
+        self._ai_panel.busy_changed.connect(
+            lambda busy: self._set_activity_source("atria", 1.0 if busy else 0.0)
+        )
 
         # Simulation #2 flags must exist before tiles register: _register_tiles
         # triggers visibility callbacks that read _sim2_camera_mode via
@@ -295,7 +310,7 @@ class Dashboard(QMainWindow):
         """Recompute pixel sizes from the live workspace or current monitor."""
         from PySide6.QtWidgets import QApplication
 
-        from gui.glass_panel import PentagonButton
+        from gui.glass_panel import BracketButton
         from gui.ui_scale import (
             apply_app_font_scale,
             rail_width,
@@ -344,7 +359,8 @@ class Dashboard(QMainWindow):
         self._chrome.apply_ui_scale(scale)
         self._telemetry_bar.apply_ui_scale(scale)
         self._telemetry_bar.update()
-        self._hex_rail.setFixedWidth(rail_width(scale))
+        self._min_tile_bar.apply_ui_scale(scale)
+        self._network_rail.setFixedWidth(rail_width(scale))
 
         for tile in self._tiles.values():
             panel = tile.content_panel()
@@ -357,7 +373,7 @@ class Dashboard(QMainWindow):
                 hdr = panel.header_widget()
                 if hdr is not None:
                     hdr.set_title_stylesheet(panel_title_stylesheet(scale))
-            for btn in panel.findChildren(PentagonButton):
+            for btn in panel.findChildren(BracketButton):
                 btn._apply_sizing()
             panel.update()
 
@@ -406,13 +422,21 @@ class Dashboard(QMainWindow):
         self._last_workspace_px = (0, 0, 0, 0)
         self._apply_ui_scale()
         self._sync_layout_after_resize()
-        self._position_hex_rail()
+        self._position_network_rail()
         self._refresh_status()
 
     def _sync_layout_after_resize(self) -> None:
         """Reposition tiles after workspace geometry or UI scale changes."""
         if self._layout_applied:
             self._tile_layout.on_window_resized()
+
+    def _set_activity_source(self, key: str, level: float) -> None:
+        """Track one contributor to the rail's activity pulse and apply the loudest."""
+        if level <= 0.0:
+            self._activity_sources.pop(key, None)
+        else:
+            self._activity_sources[key] = level
+        self._network_rail.set_activity(max(self._activity_sources.values(), default=0.0))
 
     # --- Tile registration ---
 
@@ -428,6 +452,7 @@ class Dashboard(QMainWindow):
             "piezo": self._piezo_panel,
             "fft": self._fft_panel,
             "tasks": self._tasks_panel,
+            "learn": self._learn_panel,
             "atria": self._ai_panel,
             "workspace": self._workspace_panel,
         }
@@ -444,7 +469,11 @@ class Dashboard(QMainWindow):
 
     def _validate_menu_wiring(self) -> None:
         """Fail fast in dev if a menu tile id is missing from the hub."""
-        menu_ids = {tid for tid, _ in VIEW_MENU_TILES} | {tid for tid, _ in TOOLS_MENU_TILES}
+        menu_ids = (
+            {tid for tid, _ in VIEW_MENU_TILES}
+            | {tid for tid, _ in TOOLS_MENU_TILES}
+            | {tid for tid, _ in HELP_MENU_TILES}
+        )
         missing = sorted(menu_ids - set(self._tiles.keys()))
         if missing:
             raise RuntimeError(f"Menu references tiles that were not registered: {missing}")
@@ -527,6 +556,11 @@ class Dashboard(QMainWindow):
             "Layout tips (Shift = free drag, no grid snap)",
             self._show_layout_tips,
         )
+
+        help_menu = menu.addMenu("Help")
+        self._add_menu_tile_actions(help_menu, HELP_MENU_TILES)
+        help_menu.addSeparator()
+        help_menu.addAction("Atria Commands…", self._show_atria_commands)
 
     def _add_menu_tile_actions(
         self,
@@ -874,6 +908,11 @@ class Dashboard(QMainWindow):
             ),
         )
 
+    def _show_atria_commands(self) -> None:
+        from ai.help_catalog import format_help_text
+
+        QMessageBox.information(self, APP_TITLE, format_help_text())
+
     def _on_tile_closed(self, tile_id: str) -> None:
         if tile_id.startswith("cam_"):
             role = CameraRole.coerce(tile_id[len("cam_"):])
@@ -1188,7 +1227,7 @@ class Dashboard(QMainWindow):
         detail = (
             f"Far Field: {mean_in:.0f} cts × {exp_in:.0f} µs  |  "
             f"Output: {mean_out:.0f} cts × {exp_out:.0f} µs"
-            + ("" if ref_set else "  ·  Set η=100% to calibrate")
+            + ("" if ref_set else "  ·  Click Set as η = 100% to calibrate")
         )
         self._efficiency_panel.set_efficiency(eta_pct, detail=detail)
         if eta_pct is not None:
@@ -1292,6 +1331,7 @@ class Dashboard(QMainWindow):
             self.hide_tile("roi_snapshot")
         for tile_id in ("camera", "piezo", "efficiency"):
             self.show_tile(tile_id)
+        self._set_activity_source("sim2", 0.45)
         self._log_action("Simulation #2 (piezo closed loop) started")
         self._update_telemetry(status="Simulation #2: piezo closed loop", laser="Simulated")
 
@@ -1302,6 +1342,7 @@ class Dashboard(QMainWindow):
         # (so it reports "Simulation #2" instead of falling back to idle/live).
         self._build_and_post_results_statement()
         self._sim2_camera_mode = False
+        self._set_activity_source("sim2", 0.0)
         self._sim2.set_auto(False)
         if hasattr(self._piezo_panel, "sync_buttons"):
             self._piezo_panel.sync_buttons()
@@ -1366,7 +1407,7 @@ class Dashboard(QMainWindow):
         if self._is_tile_open("efficiency"):
             self._efficiency_panel.set_efficiency(
                 rec["eta_pct"],
-                detail="Simulation #2 · transmitted η (Far Field → Output)",
+                detail="Simulation #2: efficiency from Far Field to Output camera",
             )
         self._update_telemetry(efficiency_pct=rec["eta_pct"])
 
@@ -1451,7 +1492,7 @@ class Dashboard(QMainWindow):
             if self._is_tile_open("efficiency"):
                 self._efficiency_panel.set_efficiency(
                     eta_pct,
-                    detail="Fiber exit η · P(out)/P(in) vs calibrated baseline",
+                    detail="Efficiency vs. the calibrated 100% baseline",
                 )
             if self._is_tile_open("trends"):
                 self._trend_panel.append_sample(eta_pct=eta_pct)
@@ -1555,6 +1596,7 @@ class Dashboard(QMainWindow):
 
         for tile_id in ("camera", "beam", "efficiency", "trends", "fft", "roi_snapshot"):
             self.show_tile(tile_id)
+        self._set_activity_source("sim1", 0.45)
 
         if duration_sec is not None and duration_sec > 0:
             self._simulation_timer.start(int(duration_sec * 1000))
@@ -1575,6 +1617,7 @@ class Dashboard(QMainWindow):
             return
         self._simulation_timer.stop()
         self._simulation_active = False
+        self._set_activity_source("sim1", 0.0)
         worker = self._simulation_worker
         self._simulation_worker = None
         if worker is not None:
@@ -2302,7 +2345,7 @@ class Dashboard(QMainWindow):
         if handle is not None and not self._screen_hooked:
             handle.screenChanged.connect(self._on_screen_changed)
             self._screen_hooked = True
-        self._position_hex_rail()
+        self._position_network_rail()
         self._apply_ui_scale()
         ws = self._tile_layout.workspace_rect()
         self._last_workspace_px = (ws.x(), ws.y(), ws.width(), ws.height())
@@ -2330,13 +2373,15 @@ class Dashboard(QMainWindow):
             self._last_workspace_px = ws_key
             self._apply_ui_scale()
             self._sync_layout_after_resize()
-        self._position_hex_rail()
+        self._position_network_rail()
         self._position_min_tile_bar()
         self._position_toast_overlay()
 
     def _position_toast_overlay(self) -> None:
-        width = 340
-        bottom_margin = MinimizedTileBar.BAR_HEIGHT + 16
+        from gui.ui_scale import minimized_bar_height, toast_width
+
+        width = toast_width()
+        bottom_margin = minimized_bar_height() + 16
         top = self.chrome_height() + 8
         self._toast.setGeometry(
             max(0, self.width() - width - 16),
@@ -2347,30 +2392,31 @@ class Dashboard(QMainWindow):
         self._toast.raise_()
 
     def _position_min_tile_bar(self) -> None:
-        from gui.ui_scale import rail_width
+        from gui.ui_scale import minimized_bar_height, rail_width
 
-        top = self.height() - MinimizedTileBar.BAR_HEIGHT - 4
+        bar_height = minimized_bar_height()
+        top = self.height() - bar_height - 4
         left = rail_width()
         self._min_tile_bar.setGeometry(
             left,
             max(self.chrome_height(), top),
             max(200, self.width() - left - 8),
-            MinimizedTileBar.BAR_HEIGHT,
+            bar_height,
         )
         if self._min_tile_bar.isVisible():
             self._min_tile_bar.raise_()
 
-    def _position_hex_rail(self) -> None:
+    def _position_network_rail(self) -> None:
         from gui.ui_scale import rail_width
 
         top = self.chrome_height()
-        self._hex_rail.setGeometry(
+        self._network_rail.setGeometry(
             0,
             top,
             rail_width(),
             max(0, self.height() - top),
         )
-        self._hex_rail.raise_()
+        self._network_rail.raise_()
         self._position_min_tile_bar()
         self._position_toast_overlay()
 
@@ -2378,9 +2424,20 @@ class Dashboard(QMainWindow):
         for tile_id in DEFAULT_HIDDEN:
             self._tiles[tile_id].hide()
 
+    def _remember_window_state(self) -> None:
+        """Snapshot the current monitor/position so the next launch reopens here."""
+        from gui.window_controls import capture_window_state
+
+        screen_name, geometry, maximized = capture_window_state(self)
+        self._cfg.window_screen_name = screen_name
+        self._cfg.window_geometry = geometry
+        self._cfg.window_maximized = maximized
+        save_config(self._cfg)
+
     def closeEvent(self, event) -> None:
         if not self._shutting_down:
             self._shutting_down = True
+            self._remember_window_state()
             self._shutdown_all()
         event.accept()
         super().closeEvent(event)
@@ -2403,5 +2460,5 @@ class Dashboard(QMainWindow):
         self._motion.disconnect()
         for tile in self._tiles.values():
             tile.shutdown()
-        if hasattr(self, "_hex_rail"):
-            self._hex_rail.hide()
+        if hasattr(self, "_network_rail"):
+            self._network_rail.hide()

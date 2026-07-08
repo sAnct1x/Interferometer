@@ -8,8 +8,16 @@ from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from gui.glass_panel import octagon_path
-from gui.neon_theme import COLOR_CYAN, COLOR_HOT, COLOR_PINK, glass_fill_gradient, tile_dark_overlay
+from gui.glass_panel import panel_path
+from gui.neon_theme import (
+    COLOR_CYAN,
+    COLOR_HOT,
+    COLOR_PINK,
+    draw_multicolor_glow,
+    draw_panel_texture,
+    glass_fill_gradient,
+    tile_dark_overlay,
+)
 from gui.typography import TEXT_PRIMARY, body_pt
 
 _MAX_VISIBLE = 3
@@ -71,11 +79,16 @@ class _ToastPill(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
-        path = octagon_path(rect, chamfer=10)
+        path = panel_path(rect, chamfer=10)
+        accent = COLOR_HOT if self._kind == "error" else COLOR_CYAN
+        draw_multicolor_glow(
+            painter,
+            path,
+            layers=[(accent, 3, 40), (COLOR_PINK, 1.5, 70)],
+        )
         painter.fillPath(path, glass_fill_gradient(rect, path))
         painter.fillPath(path, tile_dark_overlay())
-
-        accent = COLOR_HOT if self._kind == "error" else COLOR_CYAN
+        draw_panel_texture(painter, path, rect)
         outer = QPen(accent, 2)
         painter.setPen(outer)
         painter.drawPath(path)

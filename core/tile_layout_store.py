@@ -15,7 +15,7 @@ LAYOUT_VERSION = 2
 # Tiles hidden on first launch (opened from Tools / View menus). The cam_*
 # tiles only appear when the user pops a camera out of the Bench Cameras tile.
 STARTUP_HIDDEN_TILES = frozenset(
-    {"stage", "workspace", "piezo", "fft", "tasks",
+    {"stage", "workspace", "piezo", "fft", "tasks", "learn",
      "cam_far_field", "cam_image", "cam_output"}
 )
 
@@ -32,6 +32,7 @@ DEFAULT_TILE_LAYOUT: dict[str, dict[str, float]] = {
     "piezo": {"x": 0.58, "y": 0.55, "w": 0.22, "h": 0.35},
     "fft": {"x": 0.58, "y": 0.18, "w": 0.22, "h": 0.32},
     "tasks": {"x": 0.76, "y": 0.55, "w": 0.22, "h": 0.38},
+    "learn": {"x": 0.24, "y": 0.10, "w": 0.50, "h": 0.60},
     "workspace": {"x": 0.24, "y": 0.16, "w": 0.52, "h": 0.68},
     # Popped-out camera tiles land stacked on the right until dragged.
     "cam_far_field": {"x": 0.54, "y": 0.04, "w": 0.28, "h": 0.44},
@@ -47,7 +48,8 @@ COMPACT_TILE_LAYOUT: dict[str, dict[str, float]] = {
 }
 
 COMPACT_HIDDEN_TILES = frozenset(
-    {"trends", "roi_snapshot", "efficiency", "status", "stage", "piezo", "fft", "tasks", "workspace"}
+    {"trends", "roi_snapshot", "efficiency", "status", "stage", "piezo", "fft", "tasks",
+     "workspace", "learn"}
 )
 
 

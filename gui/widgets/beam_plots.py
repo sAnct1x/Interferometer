@@ -11,8 +11,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QStackedWidget, QWidget
 
 from config import BEAM_WAIST_TARGET_UM, PIXEL_SIZE_UM
-from gui.glass_panel import GlassPanel, PentagonButton
-from gui.neon_theme import NEON_CYAN, NEON_PINK, NEON_PURPLE
+from gui.glass_panel import GlassPanel, BracketButton
+from gui.neon_theme import CONTROL_FIELD_BG, NEON_CYAN, NEON_PINK, NEON_PURPLE
 from gui.typography import callout_style, hint_style, style_neon_plot
 from gui.heatmap import intensity_to_rgb
 from gui.widgets.beam_surface_3d import BeamSurface3D
@@ -52,13 +52,17 @@ class BeamPlotsPanel(GlassPanel):
         header_row = QHBoxLayout()
         header_row.setSpacing(8)
         self._summary = QLabel("Start live feed (or snap a frame), then click Analyze Beam.")
+        self._summary.setToolTip(
+            "w₀: beam waist (narrowest point) · M²: beam quality (1 is perfect) · "
+            "FWHM: width at half the peak height. See the Learn tile for details."
+        )
         self._summary.setWordWrap(True)
         self._summary.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._summary.setMaximumHeight(56)
         self._summary.setStyleSheet(callout_style())
         header_row.addWidget(self._summary, stretch=1)
 
-        self._analyze_btn = PentagonButton("⬡ Analyze Beam")
+        self._analyze_btn = BracketButton("◎ Analyze Beam")
         self._analyze_btn.setToolTip("Capture the current live frame and run Gaussian beam fit")
         self._analyze_btn.clicked.connect(self.analyze_requested)
         header_row.addWidget(self._analyze_btn, stretch=0)
@@ -84,7 +88,7 @@ class BeamPlotsPanel(GlassPanel):
         self._gl_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._gl_placeholder.setStyleSheet(
             hint_style()
-            + f" background: rgba(18,10,40,0.85); border: 1px dashed {NEON_PURPLE}; border-radius: 6px;"
+            + f" background: {CONTROL_FIELD_BG}; border: 1px dashed {NEON_PURPLE}; border-radius: 6px;"
         )
         self._gl_stack.addWidget(self._gl_placeholder)
 

@@ -6,7 +6,7 @@ import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
-from gui.glass_panel import GlassPanel, PentagonButton
+from gui.glass_panel import GlassPanel, BracketButton
 from gui.widgets.camera_view import RoiMode, SnapshotRoiViewport
 
 
@@ -33,17 +33,24 @@ class RoiSnapshotPanel(GlassPanel):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        save_btn = PentagonButton("Save ROI Box", compact=True)
+        save_btn = BracketButton("Save ROI Box", compact=True)
         save_btn.setToolTip(
             "Saves this ROI box's position and size to config.\n"
             "To capture an image, use Snap Frame in the Live Camera tile."
         )
         save_btn.clicked.connect(self.capture_requested.emit)
         actions.addWidget(save_btn)
-        self._scan_btn = PentagonButton("Scan wavelength", compact=True)
+        self._scan_btn = BracketButton("Scan wavelength", compact=True)
+        self._scan_btn.setToolTip(
+            "Step the stage across the fringe ROI and recover the laser's wavelength "
+            "from how the interference pattern shifts."
+        )
         self._scan_btn.clicked.connect(self.wavelength_scan_requested.emit)
         actions.addWidget(self._scan_btn)
-        analyze_btn = PentagonButton("Analyze Beam", compact=True)
+        analyze_btn = BracketButton("Analyze Beam", compact=True)
+        analyze_btn.setToolTip(
+            "Fit a Gaussian profile to this ROI and report beam waist, quality (M²), and FWHM."
+        )
         analyze_btn.clicked.connect(self.analyze_requested.emit)
         actions.addWidget(analyze_btn)
         actions.addStretch()

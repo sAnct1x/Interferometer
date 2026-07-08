@@ -6,7 +6,8 @@ from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPen, QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QLabel, QWidget, QSizePolicy
 
-from gui.glass_panel import GlassPanel, PentagonButton
+from gui.glass_panel import GlassPanel, BracketButton
+from gui.neon_theme import COLOR_BLUE, COLOR_CYAN, COLOR_HOT, COLOR_MAGENTA, COLOR_PURPLE
 from gui.typography import callout_style, hint_style, muted_style
 
 
@@ -14,7 +15,7 @@ class EfficiencyMeterPanel(GlassPanel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent, title="Beam Efficiency")
         self._eta: float | None = None
-        self._detail = "Hollow-core fiber exit · calibrate P(in) baseline"
+        self._detail = "Efficiency (η): how much light makes it through the fiber. Not calibrated yet"
 
         layout = QVBoxLayout(self)
         inset = self.content_margins()
@@ -35,12 +36,20 @@ class EfficiencyMeterPanel(GlassPanel):
         self._bar = _ThermoBar()
         layout.addWidget(self._bar, stretch=1)
 
-        self._formula = QLabel("η = P(out) / P(in)  ·  fiber exit power fraction")
+        self._formula = QLabel("η = P(out) / P(in)  ·  fraction of light that makes it through")
         self._formula.setStyleSheet(hint_style())
         self._formula.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._formula.setToolTip(
+            "Coupling efficiency: how much of the light hitting the fiber comes out "
+            "the other end. See the Learn tile for the full explanation."
+        )
         layout.addWidget(self._formula)
 
-        self._cal_btn = PentagonButton("Set as η = 100%", compact=True)
+        self._cal_btn = BracketButton("Set as η = 100%", compact=True)
+        self._cal_btn.setToolTip(
+            "Use the current reading as the 100% reference, so future readings are "
+            "reported relative to it."
+        )
         cal_row = QHBoxLayout()
         cal_row.addStretch()
         cal_row.addWidget(self._cal_btn)
@@ -71,7 +80,7 @@ class EfficiencyMeterPanel(GlassPanel):
     def reset(self) -> None:
         self.set_efficiency(
             None,
-            detail="Enable live feed · use Calibrate η baseline to set the reference",
+            detail="Turn on the live feed, then click Set as η = 100% to calibrate",
         )
 
 
@@ -117,23 +126,23 @@ class _ThermoBar(QWidget):
 
         painter.fillRect(bar, QColor(15, 8, 35, 190))
         for width, alpha, color in (
-            (8, 25, (255, 0, 110)),
-            (5, 40, (168, 85, 247)),
-            (2, 80, (0, 245, 255)),
+            (8, 25, COLOR_HOT),
+            (5, 40, COLOR_PURPLE),
+            (2, 80, COLOR_CYAN),
         ):
-            glow = QPen(QColor(*color, alpha), width)
+            glow = QPen(QColor(color.red(), color.green(), color.blue(), alpha), width)
             painter.setPen(glow)
             painter.drawRect(bar)
-        painter.setPen(QPen(QColor(0, 245, 255, 180), 2))
+        painter.setPen(QPen(QColor(COLOR_CYAN.red(), COLOR_CYAN.green(), COLOR_CYAN.blue(), 180), 2))
         painter.drawRect(bar)
 
         fill_h = int(bar.height() * self._level)
         if fill_h > 0:
             grad = QLinearGradient(0, bar.bottom(), 0, bar.top())
-            grad.setColorAt(0.0, QColor(124, 58, 237, 240))
-            grad.setColorAt(0.35, QColor(236, 72, 153, 240))
-            grad.setColorAt(0.7, QColor(59, 130, 255, 240))
-            grad.setColorAt(1.0, QColor(0, 245, 255, 255))
+            grad.setColorAt(0.0, QColor(COLOR_PURPLE.red(), COLOR_PURPLE.green(), COLOR_PURPLE.blue(), 240))
+            grad.setColorAt(0.35, QColor(COLOR_MAGENTA.red(), COLOR_MAGENTA.green(), COLOR_MAGENTA.blue(), 240))
+            grad.setColorAt(0.7, QColor(COLOR_BLUE.red(), COLOR_BLUE.green(), COLOR_BLUE.blue(), 240))
+            grad.setColorAt(1.0, QColor(COLOR_CYAN.red(), COLOR_CYAN.green(), COLOR_CYAN.blue(), 255))
             fill_rect = bar.adjusted(2, bar.height() - fill_h + 2, -2, -2)
             painter.fillRect(fill_rect, grad)
 

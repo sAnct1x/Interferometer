@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.glass_panel import GlassPanel
-from gui.neon_theme import NEON_PURPLE
+from gui.neon_theme import CONTROL_FIELD_BG, NEON_PURPLE
 from gui.typography import hint_style, muted_style, TEXT_PRIMARY
 
 
@@ -63,7 +63,7 @@ class WorkspacePanel(GlassPanel):
         self._text_view = QTextEdit()
         self._text_view.setReadOnly(True)
         self._text_view.setStyleSheet(
-            f"background: rgba(12,8,32,0.85); color: {TEXT_PRIMARY}; "
+            f"background: {CONTROL_FIELD_BG}; color: {TEXT_PRIMARY}; "
             f"border: 1px solid {NEON_PURPLE}; border-radius: 6px; "
             "font-family: Consolas; padding: 8px;"
         )

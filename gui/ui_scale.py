@@ -251,6 +251,19 @@ def telemetry_bar_height(scale: float | None = None) -> int:
     return max(38, px(52, scale))
 
 
+def minimized_bar_height(scale: float | None = None) -> int:
+    return max(36, px(52, scale))
+
+
+def toast_width(scale: float | None = None) -> int:
+    return max(220, px(340, scale))
+
+
+def splash_size(scale: float | None = None) -> tuple[int, int]:
+    """Splash window size. Scales with the primary monitor like every other surface."""
+    return px(520, scale), px(320, scale)
+
+
 def panel_header_height(scale: float | None = None) -> int:
     return px(32, scale)
 

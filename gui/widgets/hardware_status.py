@@ -23,25 +23,30 @@ class HardwareStatusPanel(GlassPanel):
         grid.setVerticalSpacing(8)
 
         rows = [
-            ("λ", f"{LASER_WAVELENGTH_NM:.1f} nm", "wavelength"),
+            ("Wavelength (λ)", f"{LASER_WAVELENGTH_NM:.1f} nm", "wavelength"),
             ("Far Field Cam", "Idle", "camera_far_field"),
             ("Output Cam", "—", "camera_output"),
             ("Stage", "Disconnected", "stage"),
-            ("λ scan", "Idle", "scan"),
+            ("Wavelength scan", "Idle", "scan"),
             ("UI scale", "100%", "ui_scale"),
             ("Display", "—", "display"),
             ("Laser", "Manual / Off", "laser"),
-            ("Coupling Δ", "—", "coupling_err"),
-            ("Coupling θ", "—", "coupling_ang"),
+            ("Beam offset (Δ)", "—", "coupling_err", "How far the beam center is from its target."),
+            ("Beam angle (θ)", "—", "coupling_ang", "The beam's pointing angle relative to target."),
             ("CPU", "—", "cpu"),
             ("RAM", "—", "ram"),
             ("Network", "—", "network"),
         ]
-        for row, (label, default, key) in enumerate(rows):
+        for row, row_data in enumerate(rows):
+            label, default, key = row_data[0], row_data[1], row_data[2]
+            tip = row_data[3] if len(row_data) > 3 else ""
             name = QLabel(label)
             name.setStyleSheet(muted_style())
             val = QLabel(default)
             val.setStyleSheet(value_style())
+            if tip:
+                name.setToolTip(tip)
+                val.setToolTip(tip)
             grid.addWidget(name, row, 0)
             grid.addWidget(val, row, 1)
             self._fields[key] = val

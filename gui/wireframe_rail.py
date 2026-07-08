@@ -1,4 +1,4 @@
-"""Left hub rail: full-height Pleiad proximity point-cloud network."""
+"""Left hub rail: full-height Pleiad proximity point-cloud network overlay."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from gui.pleiad_network import PleiadNetwork
 from gui.ui_scale import get_scale, px
 
 
-class HexRailOverlay(QWidget):
+class NetworkRail(QWidget):
     """Fixed-width left rail; mouse-transparent so tiles stay interactive."""
 
     WIDTH = 120
@@ -28,8 +28,12 @@ class HexRailOverlay(QWidget):
         timer.timeout.connect(self._tick)
         timer.start(33)
 
+    def set_activity(self, level: float) -> None:
+        """0 = idle, 1 = fully active; nudges the network's brightness pulse."""
+        self._network.set_activity(level)
+
     def _tick(self) -> None:
-        self._network.step(dt=1.0, spin=0.003)
+        self._network.step(dt=1.0)
         self.update()
 
     def paintEvent(self, event) -> None:

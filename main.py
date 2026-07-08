@@ -32,7 +32,7 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     from config import APP_TITLE
-    from gui.screen_placement import center_on_primary, show_maximized_on_primary
+    from gui.screen_placement import center_on_primary, restore_window_state, show_maximized_on_primary
     from gui.splash import SplashScreen
 
     app = QApplication(sys.argv)
@@ -44,6 +44,15 @@ def main() -> int:
     app.setApplicationName(APP_TITLE)
     app.setOrganizationName("InterferometerAutomation")
     app.setQuitOnLastWindowClosed(True)
+
+    # Seed the UI scale from the primary monitor before the splash is built, so
+    # its fixed size and fonts already match this screen instead of always
+    # rendering at the 1.0 design scale. Dashboard takes over scale management
+    # (per-workspace, live) once it's constructed.
+    from gui.ui_scale import screen_ui_scale, set_current_scale
+    from gui.window_controls import primary_screen
+
+    set_current_scale(screen_ui_scale(primary_screen()))
 
     splash = SplashScreen()
     splash.set_progress("Launching…", 0)
@@ -81,7 +90,19 @@ def main() -> int:
             dash = Dashboard()
             dashboard_holder.append(dash)
             splash.close()
-            show_maximized_on_primary(dash)
+
+            # Reopen on whichever monitor/position the app was last closed on;
+            # fall back to maximizing on the primary monitor if that display
+            # is no longer connected (or this is the first launch).
+            cfg = load_config()
+            restored = restore_window_state(
+                dash,
+                screen_name=cfg.window_screen_name,
+                geometry=cfg.window_geometry,
+                maximized=cfg.window_maximized,
+            )
+            if not restored:
+                show_maximized_on_primary(dash)
 
             if not ok and message:
                 dash._show_error(f"Started with warnings: {message}")

@@ -17,16 +17,19 @@ from core.tile_layout_store import (
     save_tile_layout,
 )
 from gui.hub_tile import NON_SNAPPING_TILES
-from gui.ui_scale import ABS_MIN_TILE_H, ABS_MIN_TILE_W, grid_cell_px, tile_min_size
+from gui.ui_scale import ABS_MIN_TILE_H, ABS_MIN_TILE_W, grid_cell_px, minimized_bar_height, px, tile_min_size
 from gui.workspace_grid import clamp_rect_to_bounds, snap_rect_to_grid
 
 if TYPE_CHECKING:
     from gui.dashboard import Dashboard
 
-SNAP_HOME_PX = 96
-SNAP_EDGE_PX = 28
 OVERLAP_REJECT = 0.85
 MIN_EDGE_OVERLAP = 0.28
+
+
+def _snap_edge_px() -> int:
+    """Edge-magnet catch distance, scaled so it feels the same reach on any monitor."""
+    return px(28)
 
 
 @dataclass
@@ -87,7 +90,7 @@ class TileLayoutController:
 
     def workspace_rect(self) -> QRect:
         """Tile layout bounds in central-widget coordinates."""
-        from gui.wireframe_rail import HexRailOverlay
+        from gui.wireframe_rail import NetworkRail
 
         cw = self._dash.centralWidget()
         if cw is None:
@@ -95,9 +98,7 @@ class TileLayoutController:
 
         bar_reserve = 0
         if hasattr(self._dash, "_min_tile_bar") and self._dash._min_tile_bar.isVisible():
-            from gui.minimized_tile_bar import MinimizedTileBar
-
-            bar_reserve = MinimizedTileBar.BAR_HEIGHT + 6
+            bar_reserve = minimized_bar_height() + 6
 
         from gui.ui_scale import rail_width
 
@@ -433,8 +434,9 @@ class TileLayoutController:
 
     def _nudge_to_neighbor_edge(self, rect: QRect) -> QRect | None:
         """Light edge magnet: nudge from drop position, never jump to a distant align slot."""
+        edge_px = _snap_edge_px()
         best = QRect(rect)
-        best_score = float(SNAP_EDGE_PX) + 1.0
+        best_score = float(edge_px) + 1.0
 
         for other_id, other in self._dash.tiles.items():
             if not other.isVisible():
@@ -446,51 +448,53 @@ class TileLayoutController:
                 if _overlap_ratio(candidate, target) >= OVERLAP_REJECT:
                     continue
                 score = self._edge_score(candidate, target)
-                if score <= SNAP_EDGE_PX and score < best_score:
+                if score <= edge_px and score < best_score:
                     best_score = score
                     best = candidate
 
-        if best_score <= SNAP_EDGE_PX:
+        if best_score <= edge_px:
             return best
         return None
 
     @staticmethod
     def _edge_nudges(moving: QRect, target: QRect) -> list[QRect]:
         """Small translations from the user's drop position toward a neighbor edge."""
+        edge_px = _snap_edge_px()
         gap = 6
         w, h = moving.width(), moving.height()
         nudges: list[QRect] = []
 
         dx_right = target.right() + gap - moving.left()
-        if abs(dx_right) <= SNAP_EDGE_PX:
+        if abs(dx_right) <= edge_px:
             nudges.append(QRect(moving.left() + dx_right, moving.top(), w, h))
 
         dx_left = target.left() - gap - w - moving.left()
-        if abs(dx_left) <= SNAP_EDGE_PX:
+        if abs(dx_left) <= edge_px:
             nudges.append(QRect(moving.left() + dx_left, moving.top(), w, h))
 
         dy_below = target.bottom() + gap - moving.top()
-        if abs(dy_below) <= SNAP_EDGE_PX:
+        if abs(dy_below) <= edge_px:
             nudges.append(QRect(moving.left(), moving.top() + dy_below, w, h))
 
         dy_above = target.top() - gap - h - moving.top()
-        if abs(dy_above) <= SNAP_EDGE_PX:
+        if abs(dy_above) <= edge_px:
             nudges.append(QRect(moving.left(), moving.top() + dy_above, w, h))
 
         return nudges
 
     @staticmethod
     def _edge_score(a: QRect, b: QRect) -> float:
+        edge_px = _snap_edge_px()
         dx = min(abs(a.left() - b.right()), abs(a.right() - b.left()))
         dy = min(abs(a.top() - b.bottom()), abs(a.bottom() - b.top()))
         parallel = 0.0
-        if dx <= SNAP_EDGE_PX:
+        if dx <= edge_px:
             parallel = max(
                 parallel,
                 (min(a.bottom(), b.bottom()) - max(a.top(), b.top()))
                 / max(1, min(a.height(), b.height())),
             )
-        if dy <= SNAP_EDGE_PX:
+        if dy <= edge_px:
             parallel = max(
                 parallel,
                 (min(a.right(), b.right()) - max(a.left(), b.left()))

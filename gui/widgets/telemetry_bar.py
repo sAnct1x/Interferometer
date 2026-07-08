@@ -9,7 +9,7 @@ from PySide6.QtGui import QPainter, QPen, QColor, QFont
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QWidget
 
 from config import LASER_WAVELENGTH_NM
-from gui.glass_panel import octagon_path
+from gui.glass_panel import panel_path
 from gui.neon_theme import (
     CHROME_TELEMETRY_GAP_PX,
     chip_accent_color,
@@ -54,9 +54,15 @@ class TelemetryBar(QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(8)
 
-        self._waist = _GlowChip("Waist", "", accent_idx=0)
-        self._lambda = _GlowChip("λ", f"{LASER_WAVELENGTH_NM:.0f} nm", accent_idx=1)
-        self._eta = _GlowChip("η", "", accent_idx=2)
+        self._waist = _GlowChip(
+            "Beam width", "", accent_idx=0,
+            help_text="Beam waist (w₀): the narrowest point of the focused laser beam.",
+        )
+        self._lambda = _GlowChip("Wavelength", f"{LASER_WAVELENGTH_NM:.0f} nm", accent_idx=1)
+        self._eta = _GlowChip(
+            "Efficiency", "", accent_idx=2,
+            help_text="Coupling efficiency (η): how much light makes it through the fiber.",
+        )
         self._cpu = _GlowChip("CPU", "", accent_idx=3)
         self._laser = _GlowChip("Laser", "MANUAL", accent_idx=4)
         self._status = _GlowChip("Status", "Ready", accent_idx=5)
@@ -76,7 +82,7 @@ class TelemetryBar(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        path = octagon_path(
+        path = panel_path(
             self.rect().adjusted(
                 1,
                 CHROME_TELEMETRY_GAP_PX + 1,
@@ -107,32 +113,50 @@ class TelemetryBar(QWidget):
 class _GlowChip(QFrame):
     """Single centered line formatted as Label and Value."""
 
-    def __init__(self, title: str, value: str, *, accent_idx: int = 0) -> None:
+    def __init__(self, title: str, value: str, *, accent_idx: int = 0, help_text: str = "") -> None:
         super().__init__()
         self._title = title
         self._value_text = value
+        self._help_text = help_text
         self._accent = chip_accent_color(accent_idx)
         self.setMinimumHeight(44)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self._refresh_tooltip()
+
+    def _refresh_tooltip(self) -> None:
+        current = f"{self._title}: {self._value_text or 'not measured yet'}"
+        if self._help_text:
+            self.setToolTip(f"{self._help_text}\n\n{current}")
+        else:
+            self.setToolTip(current)
 
     def set_value(self, text: str) -> None:
         self._value_text = text
+        self._refresh_tooltip()
         self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        path = octagon_path(self.rect().adjusted(1, 1, -1, -1), chamfer=10)
+        path = panel_path(self.rect().adjusted(1, 1, -1, -1), chamfer=10)
 
-        glow_pen = QPen(QColor(self._accent.red(), self._accent.green(), self._accent.blue(), 50), 6)
+        # A chip with nothing measured yet (no live feed / simulation running)
+        # dims its border and glow so it visibly reads as "idle", not "broken".
+        # Otherwise a bare em dash on a full-brightness chip looks like a gap.
+        is_idle = not bool(self._value_text)
+        glow_alpha = 18 if is_idle else 50
+        fill_alpha = 12 if is_idle else 28
+        edge_alpha = 110 if is_idle else 255
+
+        glow_pen = QPen(QColor(self._accent.red(), self._accent.green(), self._accent.blue(), glow_alpha), 6)
         painter.setPen(glow_pen)
         painter.drawPath(path)
 
-        fill = QColor(self._accent.red(), self._accent.green(), self._accent.blue(), 28)
+        fill = QColor(self._accent.red(), self._accent.green(), self._accent.blue(), fill_alpha)
         painter.fillPath(path, fill)
 
-        edge = QPen(self._accent, 2)
+        edge = QPen(QColor(self._accent.red(), self._accent.green(), self._accent.blue(), edge_alpha), 2)
         painter.setPen(edge)
         painter.drawPath(path)
 
@@ -143,15 +167,30 @@ class _GlowChip(QFrame):
         value_font.setBold(True)
 
         label_text = f"{self._title}: "
-        value_text = self._value_text
-
-        painter.setFont(label_font)
-        label_w = painter.fontMetrics().horizontalAdvance(label_text)
-        painter.setFont(value_font)
-        value_w = painter.fontMetrics().horizontalAdvance(value_text)
-        total_w = label_w + value_w
+        value_text = self._value_text or "—"
 
         rect = self.rect()
+        available_w = max(10, rect.width() - 16)
+
+        # Elide gracefully rather than overflow the chip's border if the label
+        # or value is too long for the available width (narrow windows, long
+        # plain-language labels, etc.). Full text is still on the tooltip.
+        painter.setFont(label_font)
+        label_fm = painter.fontMetrics()
+        label_w = label_fm.horizontalAdvance(label_text)
+        if label_w > available_w * 0.7:
+            label_text = label_fm.elidedText(
+                label_text, Qt.TextElideMode.ElideRight, int(available_w * 0.7)
+            )
+            label_w = label_fm.horizontalAdvance(label_text)
+
+        painter.setFont(value_font)
+        value_fm = painter.fontMetrics()
+        value_room = max(10, available_w - label_w)
+        value_text = value_fm.elidedText(value_text, Qt.TextElideMode.ElideRight, value_room)
+        value_w = value_fm.horizontalAdvance(value_text)
+
+        total_w = label_w + value_w
         x = rect.x() + max(8, (rect.width() - total_w) // 2)
         y = rect.center().y() + 5
 
@@ -160,5 +199,5 @@ class _GlowChip(QFrame):
         painter.drawText(x, y, label_text)
 
         painter.setFont(value_font)
-        painter.setPen(QColor(TEXT_PRIMARY))
+        painter.setPen(QColor(TEXT_MUTED) if is_idle else QColor(TEXT_PRIMARY))
         painter.drawText(x + label_w, y, value_text)

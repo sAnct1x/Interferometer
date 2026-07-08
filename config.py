@@ -102,4 +102,4 @@ CAMERA_COLOR_SPACE = "srgb"   # "srgb" (realistic) | "linear"
 # Panel silhouette: rounded-rectangle corner radius (px at 1.0 UI scale) and the
 # content inset that keeps widgets clear of the rounded border.
 PANEL_CORNER_RADIUS_PX = 20
-OCTAGON_CHAMFER_PX = 22
+PANEL_CHAMFER_PX = 22

@@ -15,28 +15,19 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
+from ai.glossary import GLOSSARY, GlossaryEntry
 from core.control.alignment import ControlMode
 from core.control.pid import PIDGains
-from gui.glass_panel import GlassPanel, PentagonButton
-from gui.neon_theme import NEON_CYAN, NEON_PINK, NEON_PURPLE, NEON_VIOLET
+from gui.glass_panel import GlassPanel, BracketButton
+from gui.neon_theme import control_field_stylesheet, NEON_CYAN, NEON_PINK, NEON_PURPLE, NEON_VIOLET
 from gui.typography import hint_style, muted_style, primary_style, style_neon_plot, TEXT_PRIMARY
 
-_CTRL_FIELD_STYLE = (
-    "QComboBox, QDoubleSpinBox {"
-    "  min-height: 24px; padding: 2px 6px;"
-    "  background: rgba(18,8,40,0.85); color: " + TEXT_PRIMARY + ";"
-    "  border: 1px solid " + NEON_PURPLE + "; border-radius: 4px;"
-    "}"
-    "QComboBox::drop-down { border: none; width: 18px; }"
-    "QComboBox QAbstractItemView {"
-    "  background: rgba(12,8,32,0.97); color: " + TEXT_PRIMARY + ";"
-    "  selection-background-color: rgba(168,85,247,0.45);"
-    "}"
-)
+_CTRL_FIELD_STYLE = control_field_stylesheet(min_height=24, dropdown_width=18)
 
 
 class PiezoControlPanel(GlassPanel):
@@ -99,19 +90,22 @@ class PiezoControlPanel(GlassPanel):
     def _build_connection_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(6)
-        self._connect_btn = PentagonButton("Connect", compact=True)
+        self._connect_btn = BracketButton("Connect", compact=True)
         self._connect_btn.clicked.connect(self._toggle_connect)
-        self._arm_btn = PentagonButton("Arm loop", compact=True)
+        self._arm_btn = BracketButton("Arm loop", compact=True)
         self._arm_btn.clicked.connect(self._toggle_arm)
-        self._estop_btn = PentagonButton("E-STOP", compact=True)
+        self._estop_btn = BracketButton("E-STOP", compact=True)
         self._estop_btn.clicked.connect(self._sim.emergency_stop)
-        self._clear_btn = PentagonButton("Clear fault", compact=True)
+        self._clear_btn = BracketButton("Clear fault", compact=True)
         self._clear_btn.clicked.connect(self._sim.clear_fault)
         for b in (self._connect_btn, self._arm_btn, self._estop_btn, self._clear_btn):
             row.addWidget(b)
         row.addStretch()
         self._readout = QLabel("η — · err — · V —")
         self._readout.setStyleSheet(primary_style())
+        self._readout.setToolTip(
+            "η: coupling efficiency · err: distance from target (pixels) · V: piezo drive voltage"
+        )
         row.addWidget(self._readout)
         return row
 
@@ -128,6 +122,11 @@ class PiezoControlPanel(GlassPanel):
         self._mode_combo.addItem("Centroid (PID)", ControlMode.CENTROID.value)
         self._mode_combo.addItem("Efficiency η (experimental)", ControlMode.EFFICIENCY.value)
         self._mode_combo.addItem("Weighted", ControlMode.WEIGHTED.value)
+        self._mode_combo.setToolTip(
+            "What error the PID loop corrects for: Centroid steers toward the beam's "
+            "center position; Efficiency steers toward maximum η directly; Weighted "
+            "blends the two."
+        )
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         grid.addWidget(self._mode_combo, 0, 1, 1, 3)
 
@@ -137,6 +136,10 @@ class PiezoControlPanel(GlassPanel):
         ):
             lbl = QLabel(name)
             lbl.setStyleSheet(muted_style())
+            lbl.setToolTip(
+                "PID gains: how strongly the controller reacts to the error's size (Kp), "
+                "history (Ki), and rate of change (Kd). See the Learn tile for the formula."
+            )
             grid.addWidget(lbl, 1, col * 2)
             sp = QDoubleSpinBox()
             sp.setStyleSheet(_CTRL_FIELD_STYLE)
@@ -176,8 +179,8 @@ class PiezoControlPanel(GlassPanel):
         self._jog_step.setSuffix(" V")
         row.addWidget(self._jog_step)
         for axis, name in enumerate(self._AXIS_LABELS):
-            minus = PentagonButton(f"{name} −", compact=True)
-            plus = PentagonButton(f"{name} +", compact=True)
+            minus = BracketButton(f"{name} −", compact=True)
+            plus = BracketButton(f"{name} +", compact=True)
             minus.clicked.connect(lambda _=False, a=axis: self._sim.jog(a, -self._jog_step.value()))
             plus.clicked.connect(lambda _=False, a=axis: self._sim.jog(a, self._jog_step.value()))
             row.addWidget(minus)
@@ -234,11 +237,11 @@ class PiezoControlPanel(GlassPanel):
         self._noise_spin.valueChanged.connect(self._push_disturbance)
         row.addWidget(self._noise_spin)
 
-        self._calm_btn = PentagonButton("Calm bench", compact=True)
+        self._calm_btn = BracketButton("Calm bench", compact=True)
         self._calm_btn.setToolTip("Zero out thermal sway (keeps a little centroid noise)")
         self._calm_btn.clicked.connect(lambda: self._apply_disturbance_preset(calm=True))
         row.addWidget(self._calm_btn)
-        self._realistic_btn = PentagonButton("Realistic", compact=True)
+        self._realistic_btn = BracketButton("Realistic", compact=True)
         self._realistic_btn.setToolTip("Restore the default thermal sway + piezo creep")
         self._realistic_btn.clicked.connect(lambda: self._apply_disturbance_preset(calm=False))
         row.addWidget(self._realistic_btn)
@@ -402,9 +405,9 @@ class FftDiagnosticsPanel(GlassPanel):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self._start_btn = PentagonButton("Start monitor", compact=True)
+        self._start_btn = BracketButton("Start monitor", compact=True)
         self._start_btn.clicked.connect(self._start)
-        self._stop_btn = PentagonButton("Stop monitor", compact=True)
+        self._stop_btn = BracketButton("Stop monitor", compact=True)
         self._stop_btn.clicked.connect(self._stop)
         row.addWidget(self._start_btn)
         row.addWidget(self._stop_btn)
@@ -497,3 +500,112 @@ class TaskManagerPanel(GlassPanel):
         self._log.insertItem(0, f"[{stamp}] {message}")
         if self._log.count() > 200:
             self._log.takeItem(self._log.count() - 1)
+
+
+class LearnReferencePanel(GlassPanel):
+    """Plain-language glossary for the bench jargon, with the math for anyone curious.
+
+    Pick a term on the left, read the explanation on the right. The same
+    entries back Atria's "explain X" chat replies, so the wording matches
+    whichever way someone looks it up.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent, title="Learn: Physics & Bench Reference")
+        layout = QHBoxLayout(self)
+        inset = self.content_margins()
+        layout.setContentsMargins(*inset)
+        layout.setSpacing(10)
+
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        left_hint = QLabel("Pick a term")
+        left_hint.setStyleSheet(muted_style())
+        left.addWidget(left_hint)
+
+        self._list = QListWidget()
+        self._list.setStyleSheet(
+            f"background: rgba(18,8,40,0.55); color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {NEON_PURPLE}; border-radius: 6px; padding: 4px;"
+        )
+        for entry in GLOSSARY:
+            self._list.addItem(entry.term)
+        self._list.currentRowChanged.connect(self._show_entry)
+        left.addWidget(self._list, stretch=1)
+
+        left_widget = QWidget()
+        left_widget.setLayout(left)
+        left_widget.setMinimumWidth(200)
+        left_widget.setMaximumWidth(260)
+        layout.addWidget(left_widget)
+
+        right = QVBoxLayout()
+        right.setSpacing(8)
+
+        self._title_label = QLabel("Select a term to read about it.")
+        self._title_label.setWordWrap(True)
+        self._title_label.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-weight: bold; font-size: {self._title_pt()}pt;"
+        )
+        right.addWidget(self._title_label)
+
+        self._plain_label = QLabel("")
+        self._plain_label.setWordWrap(True)
+        self._plain_label.setStyleSheet(primary_style())
+        right.addWidget(self._plain_label)
+
+        self._formula_label = QLabel("")
+        self._formula_label.setWordWrap(True)
+        self._formula_label.setStyleSheet(
+            f"color: {NEON_CYAN}; font-family: Consolas; font-weight: bold; "
+            f"background: rgba(18,8,40,0.55); border: 1px solid {NEON_PURPLE}; "
+            "border-radius: 6px; padding: 6px 8px;"
+        )
+        self._formula_label.hide()
+        right.addWidget(self._formula_label)
+
+        self._formula_note_label = QLabel("")
+        self._formula_note_label.setWordWrap(True)
+        self._formula_note_label.setStyleSheet(hint_style())
+        right.addWidget(self._formula_note_label)
+
+        right.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        right_widget = QWidget()
+        right_widget.setLayout(right)
+        scroll.setWidget(right_widget)
+        layout.addWidget(scroll, stretch=1)
+
+        if GLOSSARY:
+            self._list.setCurrentRow(0)
+
+    @staticmethod
+    def _title_pt() -> float:
+        from gui.typography import title_pt
+
+        return title_pt()
+
+    def _show_entry(self, row: int) -> None:
+        if row < 0 or row >= len(GLOSSARY):
+            return
+        entry: GlossaryEntry = GLOSSARY[row]
+        self._title_label.setText(entry.term)
+        self._plain_label.setText(entry.plain)
+        if entry.formula:
+            self._formula_label.setText(entry.formula)
+            self._formula_label.show()
+            self._formula_note_label.setText(entry.formula_note)
+        else:
+            self._formula_label.hide()
+            self._formula_note_label.setText("")
+
+    def select_term(self, query: str) -> None:
+        """Jump the list to the best-matching entry for ``query`` (used by Atria "learn" links)."""
+        q = query.strip().lower()
+        for row, entry in enumerate(GLOSSARY):
+            if entry.matches(q):
+                self._list.setCurrentRow(row)
+                return

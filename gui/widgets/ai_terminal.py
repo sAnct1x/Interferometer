@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from config import GEMINI_API_KEY
-from gui.glass_panel import GlassPanel, PentagonButton
-from gui.neon_theme import NEON_CYAN, NEON_PINK, NEON_PURPLE
+from gui.glass_panel import GlassPanel, BracketButton
+from gui.neon_theme import FIELD_BG, NEON_CYAN, NEON_PINK, NEON_PURPLE, PANEL_BG
 from gui.typography import hint_style, primary_style, section_style, TEXT_MUTED, TEXT_PRIMARY
 from ai.atria_agent import AtriaWorker, format_intent_reply, time_greeting, IntentBridge
 from ai.intents import Intent, parse_intent
@@ -42,13 +42,10 @@ HARDWARE_INTENTS = frozenset(
     }
 )
 
-_LOG_FRAME_STYLE = (
-    "background: rgba(18,8,40,0.55); "
-    f"border: 1px solid {NEON_PINK}; border-radius: 6px;"
-)
+_LOG_FRAME_STYLE = f"background: {PANEL_BG}; border: 1px solid {NEON_PINK}; border-radius: 6px;"
 
 _INPUT_STYLE = (
-    f"background: rgba(18,8,40,0.72); color: {TEXT_PRIMARY};"
+    f"background: {FIELD_BG}; color: {TEXT_PRIMARY};"
     f"border: 1px solid {NEON_PURPLE}; border-radius: 6px; padding: 8px;"
     "font-family: Segoe UI;"
 )
@@ -164,6 +161,7 @@ class _ChatHistory(QWidget):
 
 class AtriaPanel(GlassPanel):
     intent_action = Signal(object, bool)  # Intent, hardware_allowed
+    busy_changed = Signal(bool)  # True while a freeform reply is in flight
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, title="Atria")
@@ -224,7 +222,7 @@ class AtriaPanel(GlassPanel):
         self._input.setStyleSheet(_INPUT_STYLE)
         self._input.send_requested.connect(self._send)
 
-        self._send_btn = PentagonButton("Send", compact=True)
+        self._send_btn = BracketButton("Send", compact=True)
         self._send_btn.setFixedSize(76, 44)
         self._send_btn.clicked.connect(self._send)
 
@@ -293,6 +291,7 @@ class AtriaPanel(GlassPanel):
         use_gemini = bool(GEMINI_API_KEY)
         self._send_btn.setEnabled(False)
         self._send_btn.setText("…")
+        self.busy_changed.emit(True)
         self._worker.ask(
             text,
             prior_history,
@@ -304,6 +303,7 @@ class AtriaPanel(GlassPanel):
     def _on_atria_worker_finished(self) -> None:
         self._send_btn.setEnabled(True)
         self._send_btn.setText("Send")
+        self.busy_changed.emit(False)
 
     def _handle_intent(self, intent: Intent) -> None:
         reply = format_intent_reply(intent, self._telemetry)

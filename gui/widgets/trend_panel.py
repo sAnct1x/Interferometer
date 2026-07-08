@@ -32,10 +32,16 @@ class TrendPanel(GlassPanel):
         layout.setContentsMargins(*inset)
 
         row = QHBoxLayout()
-        self._eta_plot = pg.PlotWidget(title="Coupling η vs time")
-        self._w0_plot = pg.PlotWidget(title="w₀ stability vs time")
+        self._eta_plot = pg.PlotWidget(title="Efficiency (η) over time")
+        self._w0_plot = pg.PlotWidget(title="Beam width (w₀) over time")
+        self._eta_plot.setToolTip(
+            "Coupling efficiency: how much of the light makes it through the fiber. See Learn tile."
+        )
+        self._w0_plot.setToolTip(
+            "Beam waist: the narrowest point of the focused beam. See Learn tile."
+        )
         _style(self._eta_plot, "time (s)", "η (%)")
-        _style(self._w0_plot, "time (s)", "1/e² width (µm)")
+        _style(self._w0_plot, "time (s)", "beam width (µm)")
         self._eta_plot.setMinimumHeight(0)
         self._w0_plot.setMinimumHeight(0)
         self._eta_curve = self._eta_plot.plot(

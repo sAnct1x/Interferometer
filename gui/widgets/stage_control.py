@@ -15,28 +15,15 @@ from PySide6.QtWidgets import (
 )
 
 from core.config_store import StageLimits
-from gui.glass_panel import GlassPanel, PentagonButton
-from gui.neon_theme import NEON_PURPLE
+from gui.glass_panel import GlassPanel, BracketButton
+from gui.neon_theme import control_field_stylesheet
 from gui.typography import callout_style, muted_style, section_style, TEXT_PRIMARY
 
-_FIELD_STYLE = (
-    "QLineEdit, QDoubleSpinBox, QComboBox {"
-    "  min-height: 28px;"
-    "  padding: 4px 8px;"
-    "  background: rgba(18,8,40,0.85);"
-    "  color: " + TEXT_PRIMARY + ";"
-    "  border: 1px solid " + NEON_PURPLE + ";"
-    "  border-radius: 4px;"
-    "}"
-    "QComboBox::drop-down {"
-    "  border: none;"
-    "  width: 22px;"
-    "}"
-    "QComboBox QAbstractItemView {"
-    "  background: rgba(12,8,32,0.97);"
-    "  color: " + TEXT_PRIMARY + ";"
-    "  selection-background-color: rgba(168,85,247,0.45);"
-    "}"
+_FIELD_STYLE = control_field_stylesheet(
+    min_height=28,
+    padding="4px 8px",
+    dropdown_width=22,
+    extra_selectors="QLineEdit, QDoubleSpinBox, QComboBox",
 )
 
 _LABEL_STYLE = muted_style()
@@ -80,9 +67,9 @@ class StageControlPanel(GlassPanel):
 
         jog_row = QHBoxLayout()
         jog_row.setSpacing(6)
-        back = PentagonButton("◀ −", compact=True)
+        back = BracketButton("◀ −", compact=True)
         back.clicked.connect(lambda: self._emit_jog(-self._jog_spin.value()))
-        fwd = PentagonButton("+ ▶", compact=True)
+        fwd = BracketButton("+ ▶", compact=True)
         fwd.clicked.connect(lambda: self._emit_jog(self._jog_spin.value()))
         jog_row.addWidget(back)
         step_label = QLabel("Step")
@@ -101,11 +88,11 @@ class StageControlPanel(GlassPanel):
 
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
-        connect_btn = PentagonButton("Connect", compact=True)
+        connect_btn = BracketButton("Connect", compact=True)
         connect_btn.clicked.connect(lambda: self._on_connect and self._on_connect())
-        mark = PentagonButton("Save Home", compact=True)
+        mark = BracketButton("Save Home", compact=True)
         mark.clicked.connect(lambda: self._on_mark_home and self._on_mark_home())
-        go_home = PentagonButton("Go Home", compact=True)
+        go_home = BracketButton("Go Home", compact=True)
         go_home.clicked.connect(lambda: self._on_safe_home and self._on_safe_home())
         for btn in (connect_btn, mark, go_home):
             action_row.addWidget(btn)
@@ -159,10 +146,10 @@ class StageControlPanel(GlassPanel):
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        save_lim = PentagonButton("Save Limits", compact=True)
+        save_lim = BracketButton("Save Limits", compact=True)
         save_lim.clicked.connect(self._save_limits)
         footer.addWidget(save_lim)
-        add_stage = PentagonButton("Add stage", compact=True)
+        add_stage = BracketButton("Add stage", compact=True)
         add_stage.clicked.connect(lambda: self._on_add_stage and self._on_add_stage())
         footer.addWidget(add_stage)
         footer.addStretch()

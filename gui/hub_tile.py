@@ -20,24 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.glass_panel import GlassPanel, PanelHeader
-
-TILE_INTERLOCK: dict[str, int] = {
-    "beam": 0,
-    "camera": 1,
-    "roi_snapshot": 1,
-    "efficiency": 0,
-    "status": 1,
-    "trends": 0,
-    "stage": 1,
-    "atria": 0,
-    "workspace": 0,
-    "piezo": 1,
-    "fft": 0,
-    "tasks": 0,
-    "cam_far_field": 1,
-    "cam_image": 0,
-    "cam_output": 1,
-}
+from gui.neon_theme import accent_for_tile
 
 TILE_SHAPES: dict[str, str] = {
     "beam": "rounded",
@@ -131,8 +114,8 @@ class HubTile(QWidget):
         self._workspace_maximized = False
 
         if isinstance(content, GlassPanel):
-            content.set_interlock_phase(TILE_INTERLOCK.get(tile_id, 0))
             content.set_tile_shape(TILE_SHAPES.get(tile_id, "rounded"))
+            content.set_accent(accent_for_tile(tile_id))
             content.attach_hub_tile(self)
             self._relax_content_minimums(content)
             content.setMouseTracking(True)

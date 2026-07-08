@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import Qt, QPoint, QRect
+from PySide6.QtGui import QGuiApplication, QPainter, QScreen
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -14,13 +14,15 @@ from PySide6.QtWidgets import (
 )
 
 from config import APP_BADGE, APP_TITLE
-from gui.glass_panel import octagon_path
+from gui.glass_panel import panel_path
 from gui.window_controls import is_maximized, minimize_window, toggle_maximize
 from gui.neon_theme import (
+    ACCENT_SYSTEM,
     CHROME_TELEMETRY_GAP_PX,
     NEON_CYAN,
     NEON_PINK,
     NEON_PURPLE,
+    draw_corner_ticks,
     draw_multicolor_glow,
     draw_neon_border,
     glass_fill_gradient,
@@ -64,6 +66,10 @@ def hub_menubar_stylesheet(scale: float) -> str:
 # Default before dashboard applies live workspace scale.
 HUB_MENUBAR_STYLESHEET = hub_menubar_stylesheet(1.0)
 
+# How close the cursor needs to get to a monitor's edge, in real screen pixels,
+# before a drag counts as an Aero-Snap-style dock request.
+SNAP_HOT_ZONE_PX = 6
+
 
 class HubChromeBar(QWidget):
     """Custom top chrome: drag to move, no native title bar."""
@@ -72,6 +78,9 @@ class HubChromeBar(QWidget):
         super().__init__()
         self._window = parent_window
         self._drag_pos: QPoint | None = None
+        self._did_drag = False
+        self._snap_zone: str | None = None
+        self._snap_overlay = None
         self._max_btn: QPushButton | None = None
         self._win_btns: list[QPushButton] = []
         self._title_label: QLabel | None = None
@@ -184,7 +193,7 @@ class HubChromeBar(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        path = octagon_path(
+        path = panel_path(
             self.rect().adjusted(0, 0, -1, -1 - CHROME_TELEMETRY_GAP_PX),
             chamfer=12,
         )
@@ -192,15 +201,18 @@ class HubChromeBar(QWidget):
         painter.fillPath(path, glass_fill_gradient(self.rect(), path))
         painter.fillPath(path, chrome_bar_dark_overlay())
         draw_neon_border(painter, path)
+        draw_corner_ticks(painter, path.boundingRect(), ACCENT_SYSTEM, length=8.0, inset=5.0)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+            self._did_drag = False
             self._window._main_drag_active = True
             event.accept()
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self._did_drag = True
             if is_maximized(self._window):
                 from gui.window_controls import restore_window, screen_for_widget
 
@@ -208,8 +220,6 @@ class HubChromeBar(QWidget):
                 # instead of the full-screen "normal" size Qt would otherwise restore.
                 pre_geo = getattr(self._window, "_pre_maximize_geometry", None)
                 if pre_geo is None:
-                    from PySide6.QtCore import QRect
-                    from PySide6.QtGui import QGuiApplication
                     screen = screen_for_widget(self._window)
                     if screen is not None:
                         avail = screen.availableGeometry()
@@ -223,11 +233,84 @@ class HubChromeBar(QWidget):
                 self.set_maximized_state(False)
                 self._drag_pos = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
             self._window.move(event.globalPosition().toPoint() - self._drag_pos)
+            self._update_snap_preview(event.globalPosition().toPoint())
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
+        zone = self._detect_snap_zone(event.globalPosition().toPoint()) if self._did_drag else None
         self._drag_pos = None
+        self._did_drag = False
         self._window._main_drag_active = False
+        self._hide_snap_preview()
+        if zone is not None:
+            self._apply_snap(*zone)
         # Trigger one deferred screen check so scale + tiles update after the drag lands.
         if hasattr(self._window, "_schedule_display_refresh"):
             self._window._schedule_display_refresh(delay_ms=120)
+
+    def _half_snap_fits(self, screen: QScreen) -> bool:
+        """False when half this monitor is narrower than the app's own min width.
+
+        Snapping to a half-width the app can't actually shrink to would just have
+        Qt silently clamp wider than the preview showed, on a narrow laptop
+        display it's clearer to skip the half-snap offer entirely than to show a
+        docked-half preview and land on something else.
+        """
+        return screen.availableGeometry().width() // 2 >= self._window.minimumWidth()
+
+    def _detect_snap_zone(self, global_pos: QPoint) -> tuple[str, QScreen] | None:
+        """Which edge (if any) the cursor is currently hovering during a drag."""
+        screen = QGuiApplication.screenAt(global_pos)
+        if screen is None:
+            return None
+        avail = screen.availableGeometry()
+        if global_pos.y() <= avail.top() + SNAP_HOT_ZONE_PX:
+            return "top", screen
+        if not self._half_snap_fits(screen):
+            return None
+        if global_pos.x() <= avail.left() + SNAP_HOT_ZONE_PX:
+            return "left", screen
+        if global_pos.x() >= avail.right() - SNAP_HOT_ZONE_PX:
+            return "right", screen
+        return None
+
+    @staticmethod
+    def _snap_rect(zone: str, screen: QScreen) -> QRect:
+        avail = screen.availableGeometry()
+        if zone == "top":
+            return avail
+        half_w = avail.width() // 2
+        if zone == "left":
+            return QRect(avail.left(), avail.top(), half_w, avail.height())
+        return QRect(avail.left() + half_w, avail.top(), avail.width() - half_w, avail.height())
+
+    def _update_snap_preview(self, global_pos: QPoint) -> None:
+        hit = self._detect_snap_zone(global_pos)
+        zone = hit[0] if hit is not None else None
+        if zone == self._snap_zone:
+            return
+        self._snap_zone = zone
+        if hit is None:
+            self._hide_snap_preview()
+            return
+        if self._snap_overlay is None:
+            from gui.snap_overlay import SnapPreviewOverlay
+
+            self._snap_overlay = SnapPreviewOverlay()
+        self._snap_overlay.show_at(self._snap_rect(*hit))
+
+    def _hide_snap_preview(self) -> None:
+        self._snap_zone = None
+        if self._snap_overlay is not None:
+            self._snap_overlay.hide()
+
+    def _apply_snap(self, zone: str, screen: QScreen) -> None:
+        from gui.window_controls import assign_to_screen, maximize_on_screen
+
+        if zone == "top":
+            self._window._pre_maximize_geometry = self._window.geometry()
+            maximize_on_screen(self._window, screen)
+            self.set_maximized_state(True)
+            return
+        assign_to_screen(self._window, screen)
+        self._window.setGeometry(self._snap_rect(zone, screen))

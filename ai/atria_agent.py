@@ -44,6 +44,9 @@ def _build_system_instruction() -> str:
         "wants the action. If hardware control may be disabled, still call the tool and "
         "explain the result. "
         "For help, tell users they can type help or ask you to list commands. "
+        "If someone seems unsure what a term means (coupling efficiency, beam waist, "
+        "PID, centroid, ROI, fringe, piezo creep, wedge ghost, etc.), use the "
+        "explain_concept tool to give a plain-language answer, not just jargon back. "
         "Bench simulation via run_simulation defaults to 20 seconds unless the user "
         "specifies another duration (10s, 30s, etc.); summarize metrics when it ends. "
         "Combine tool results into a natural reply."
@@ -348,5 +351,18 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
 
     if intent.name == "results_statement":
         return "One moment, pulling together the current results…"
+
+    if intent.name == "explain_concept":
+        from ai.glossary import find_glossary_entry, format_glossary_entry
+
+        term = str(intent.params.get("term", "")).strip()
+        entry = find_glossary_entry(term)
+        if entry is None:
+            return (
+                f'No glossary entry for "{term}". Try: coupling efficiency, beam waist, '
+                "PID, centroid, ROI, fringe, FFT, piezo creep, or wedge ghost. "
+                "The Learn tile has the full list."
+            )
+        return format_glossary_entry(entry)
 
     return intent.raw

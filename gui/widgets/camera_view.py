@@ -12,11 +12,12 @@ from PySide6.QtWidgets import (
     QLabel, QDoubleSpinBox, QLineEdit, QPushButton,
 )
 
-from gui.glass_panel import GlassPanel, PentagonButton, smooth_viewport_path
-from gui.typography import body_pt, TEXT_MUTED, TEXT_PRIMARY, muted_style
+from gui.glass_panel import GlassPanel, BracketButton, smooth_viewport_path
+from gui.typography import body_px, body_pt, TEXT_MUTED, TEXT_PRIMARY, muted_style
 from gui.ui_scale import get_scale, px
 from gui.heatmap import colormap_rgb_at, intensity_centroid, intensity_to_rgb, padded_roi_crop
 from gui.neon_theme import (
+    control_field_stylesheet,
     draw_multicolor_glow,
     draw_neon_border,
     COLOR_CYAN,
@@ -34,22 +35,7 @@ _VIEWPORT_CORNER_RADIUS = 8
 _COLORBAR_WIDTH = 22
 
 
-_FIELD_STYLE = (
-    "QComboBox, QDoubleSpinBox {"
-    "  min-height: 26px;"
-    "  padding: 2px 6px;"
-    "  background: rgba(18,8,40,0.85);"
-    "  color: " + TEXT_PRIMARY + ";"
-    "  border: 1px solid " + NEON_PURPLE + ";"
-    "  border-radius: 4px;"
-    "}"
-    "QComboBox::drop-down { border: none; width: 20px; }"
-    "QComboBox QAbstractItemView {"
-    "  background: rgba(12,8,32,0.97);"
-    "  color: " + TEXT_PRIMARY + ";"
-    "  selection-background-color: rgba(168,85,247,0.45);"
-    "}"
-)
+_FIELD_STYLE = control_field_stylesheet()
 
 _EDIT_STYLE = (
     "QLineEdit {"
@@ -74,7 +60,7 @@ class _EditableLabel(QWidget):
 
         self._label = QLabel(text)
         self._label.setStyleSheet(
-            "QLabel { font-weight: bold; color: " + TEXT_PRIMARY + "; font-size: 11px; }"
+            f"QLabel {{ font-weight: bold; color: {TEXT_PRIMARY}; font-size: {body_px()}px; }}"
         )
         self._edit = QLineEdit(text)
         self._edit.setStyleSheet(_EDIT_STYLE)
@@ -135,7 +121,7 @@ class RoiMode(str, Enum):
     FRINGE = "fringe"
 
 
-class OctagonalViewport(QWidget):
+class CameraViewport(QWidget):
     """Camera display clipped to a smooth rounded rect with glow ring and targeting reticle."""
 
     def __init__(self, parent=None) -> None:
@@ -443,7 +429,7 @@ class SnapshotRoiViewport(QWidget):
 
 
 def render_frame_to_viewport(
-    viewport: OctagonalViewport,
+    viewport: CameraViewport,
     frame: np.ndarray,
     *,
     roi: tuple[int, int, int, int] | None = None,
@@ -485,7 +471,7 @@ def render_frame_to_viewport(
 
 _PANE_BTN_STYLE = (
     "QPushButton { background: rgba(18,8,40,0.7); border: 1px solid " + NEON_PURPLE + "; "
-    "border-radius: 4px; color: #d9c9ff; font-size: 11px; padding: 1px 6px; }"
+    f"border-radius: 4px; color: #d9c9ff; font-size: {body_px()}px; padding: 1px 6px; }}"
     "QPushButton:hover { border-color: " + NEON_CYAN + "; color: " + NEON_CYAN + "; }"
 )
 
@@ -509,8 +495,8 @@ class RoleCameraPane(QWidget):
         self._is_primary = True
         self._assigned_serial: str | None = None
         self._available_serials: list[str] = []
-        # Image is a documented placeholder (optics pending mentor spec); keep its
-        # hint visible even as a thumbnail so it never looks like a live feed.
+        # The Image role has no optics wired up yet; keep its hint visible even
+        # as a thumbnail so it never looks like a dead live feed.
         self._always_show_hint = getattr(role, "value", "") == "image"
 
         outer = QVBoxLayout(self)
@@ -523,6 +509,7 @@ class RoleCameraPane(QWidget):
         head.addWidget(self._label)
         cam_lbl = QLabel("Cam:")
         cam_lbl.setStyleSheet(muted_style())
+        cam_lbl.setToolTip("Pick which physical camera feeds this role")
         head.addWidget(cam_lbl)
         self._cam_combo = QComboBox()
         self._cam_combo.setStyleSheet(_FIELD_STYLE)
@@ -551,7 +538,7 @@ class RoleCameraPane(QWidget):
         self._hint.setVisible(bool(hint))
         outer.addWidget(self._hint)
 
-        self.viewport = OctagonalViewport()
+        self.viewport = CameraViewport()
         # Opt out of HubTile's minimum-size relaxation (gui/hub_tile.py): without
         # this, the viewport's own minimum gets stripped while the header row's
         # whitelisted combo/buttons keep theirs, so as a thumbnail the viewport
@@ -670,9 +657,9 @@ class CameraView(GlassPanel):
     }
 
     _ROLE_HINTS: dict = {
-        "far_field": "Wedge ghost · coupling reticle (450 µm fiber bore)",
-        "image": "Ghost 2 imaging plane: pending mentor optics spec",
-        "output": "Post-fiber camera · transmitted power for η",
+        "far_field": "Far Field: shows how well the beam lines up with the fiber opening (450 µm target)",
+        "image": "Image: not wired up yet, waiting on the optics layout",
+        "output": "Output: light after the fiber, used to measure efficiency (η)",
     }
 
     def __init__(self, parent=None) -> None:
@@ -759,21 +746,25 @@ class CameraView(GlassPanel):
         self._mode_combo.addItem("Beam waist ROI", RoiMode.BEAM.value)
         self._mode_combo.addItem("Fringe ROI (λ scan)", RoiMode.FRINGE.value)
         self._mode_combo.setToolTip(
-            "Beam waist ROI: coupling/η analysis box.\nFringe ROI: legacy λ-scan box."
+            "Beam waist ROI: box around the focused spot, used for size and coupling "
+            "measurements.\nFringe ROI: box over the interference pattern, used for "
+            "wavelength scans."
         )
         self._mode_combo.setStyleSheet(_FIELD_STYLE)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         r1.addWidget(self._mode_combo)
 
         r1.addStretch()
-        self._refresh_cams_btn = PentagonButton("⟳ Cameras", compact=True)
+        self._refresh_cams_btn = BracketButton("⟳ Cameras", compact=True)
         self._refresh_cams_btn.setToolTip("Rescan for connected cameras")
         self._refresh_cams_btn.clicked.connect(self.refresh_cameras_requested)
         r1.addWidget(self._refresh_cams_btn)
-        self._live_btn = PentagonButton("Start Live Feed", compact=True)
+        self._live_btn = BracketButton("Start Live Feed", compact=True)
+        self._live_btn.setToolTip("Start streaming live frames from the selected cameras")
         self._live_btn.clicked.connect(self._on_live_clicked)
         r1.addWidget(self._live_btn)
-        self._snap_btn = PentagonButton("Snap Frame", compact=True)
+        self._snap_btn = BracketButton("Snap Frame", compact=True)
+        self._snap_btn.setToolTip("Capture a single still frame from the primary camera")
         self._snap_btn.clicked.connect(self._snap_frame)
         r1.addWidget(self._snap_btn)
         return r1
@@ -786,17 +777,23 @@ class CameraView(GlassPanel):
         r2.addWidget(settings_lbl)
         self._role_btns: dict = {}
         for role in self._roles:
-            btn = PentagonButton(role.label, compact=True)
+            btn = BracketButton(role.label, compact=True)
             btn.setToolTip(f"Edit exposure, FPS, and white balance for {role.label}")
             btn.clicked.connect(lambda _=False, rr=role: self._select_settings_role(rr))
             self._role_btns[role] = btn
             r2.addWidget(btn)
 
+        exp_tip = (
+            "Exposure time in microseconds: how long the sensor collects light per "
+            "frame. Higher = brighter image but a slower maximum frame rate."
+        )
         exp_lbl = QLabel("Exp µs")
         exp_lbl.setStyleSheet(muted_style())
+        exp_lbl.setToolTip(exp_tip)
         r2.addWidget(exp_lbl)
         self._exp_spin = QDoubleSpinBox()
         self._exp_spin.setStyleSheet(_FIELD_STYLE)
+        self._exp_spin.setToolTip(exp_tip)
         self._exp_spin.setRange(10.0, 1_000_000.0)
         self._exp_spin.setDecimals(0)
         self._exp_spin.setSingleStep(100.0)
@@ -807,6 +804,10 @@ class CameraView(GlassPanel):
 
         self._fps_mode = QComboBox()
         self._fps_mode.setStyleSheet(_FIELD_STYLE)
+        self._fps_mode.setToolTip(
+            "Auto FPS: camera runs as fast as the current exposure allows.\n"
+            "Fixed FPS: cap the frame rate to a set value below."
+        )
         self._fps_mode.addItem("Auto FPS", True)
         self._fps_mode.addItem("Fixed FPS", False)
         self._fps_mode.setFixedWidth(90)
@@ -814,6 +815,7 @@ class CameraView(GlassPanel):
         r2.addWidget(self._fps_mode)
         self._fps_spin = QDoubleSpinBox()
         self._fps_spin.setStyleSheet(_FIELD_STYLE)
+        self._fps_spin.setToolTip("Target frames per second when Fixed FPS is selected")
         self._fps_spin.setRange(1.0, 120.0)
         self._fps_spin.setDecimals(1)
         self._fps_spin.setSingleStep(1.0)
@@ -824,6 +826,7 @@ class CameraView(GlassPanel):
         r2.addWidget(self._fps_spin)
         self._fps_live = QLabel("— fps")
         self._fps_live.setStyleSheet(muted_style())
+        self._fps_live.setToolTip("Live measured frame rate from the camera")
         r2.addWidget(self._fps_live)
         r2.addStretch()
         return r2
@@ -833,14 +836,22 @@ class CameraView(GlassPanel):
         wb_row.setSpacing(5)
         wb_lbl = QLabel("WB")
         wb_lbl.setStyleSheet(muted_style())
+        wb_lbl.setToolTip(
+            "White balance: per-channel color gain so the sensor's colors look "
+            "correct under this light source. 1.00 = no correction."
+        )
         wb_row.addWidget(wb_lbl)
         self._wb_spins: list[QDoubleSpinBox] = []
+        channel_names = {"R": "Red", "G": "Green", "B": "Blue"}
         for ch_txt, default in zip(("R", "G", "B"), (1.0, 1.0, 1.0)):
+            ch_tip = f"{channel_names[ch_txt]} channel gain (white balance)"
             ch = QLabel(ch_txt)
             ch.setStyleSheet(muted_style())
+            ch.setToolTip(ch_tip)
             wb_row.addWidget(ch)
             sp = QDoubleSpinBox()
             sp.setStyleSheet(_FIELD_STYLE)
+            sp.setToolTip(ch_tip)
             sp.setRange(0.1, 4.0)
             sp.setDecimals(2)
             sp.setSingleStep(0.05)
@@ -849,7 +860,8 @@ class CameraView(GlassPanel):
             sp.valueChanged.connect(self._emit_white_balance)
             self._wb_spins.append(sp)
             wb_row.addWidget(sp)
-        self._wb_reset = PentagonButton("Default", compact=True)
+        self._wb_reset = BracketButton("Default", compact=True)
+        self._wb_reset.setToolTip("Reset white balance to 1.00 / 1.00 / 1.00 (no color correction)")
         self._wb_reset.clicked.connect(self._reset_white_balance)
         wb_row.addWidget(self._wb_reset)
         wb_row.addStretch()
@@ -1053,7 +1065,7 @@ class CameraView(GlassPanel):
                 continue
             if role.value == "image":
                 pane.viewport.set_idle(
-                    "Image (Ghost 2)\n\nWaiting for optical spec\n(plane, path length, dᵢ)"
+                    "Image view\n\nNot wired up yet\n(waiting on the optics layout)"
                 )
             elif role == self._primary_role:
                 pane.viewport.set_idle(f"{role.label}\n\nStart live feed or snap a frame.")

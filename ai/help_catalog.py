@@ -200,6 +200,19 @@ HELP_SECTIONS: tuple[tuple[str, tuple[HelpEntry, ...]], ...] = (
             ),
         ),
     ),
+    (
+        "Learn",
+        (
+            HelpEntry(
+                "explain_concept",
+                "Explain a term",
+                "Plain-language explanation (plus the formula) for a bench term "
+                "like coupling efficiency, beam waist, PID, centroid, ROI, fringe, "
+                "piezo creep, or wedge ghost.",
+                ("explain coupling efficiency", "what does w0 mean", "define PID"),
+            ),
+        ),
+    ),
 )
 
 _TOPIC_ALIASES: dict[str, tuple[str, ...]] = {
@@ -209,6 +222,7 @@ _TOPIC_ALIASES: dict[str, tuple[str, ...]] = {
     "stage": ("stage", "k-cube", "kcube", "jog", "home"),
     "bench": ("bench", "scan", "fft", "efficiency", "csv"),
     "tiles": ("tile", "tiles", "open", "show"),
+    "learn": ("learn", "explain", "define", "glossary", "mean"),
 }
 
 
@@ -229,6 +243,7 @@ _SECTION_KEYS: dict[str, str] = {
     "Stage": "stage",
     "Bench": "bench",
     "Tiles": "tiles",
+    "Learn": "learn",
 }
 
 

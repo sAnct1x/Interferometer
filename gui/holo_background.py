@@ -1,4 +1,4 @@
-"""Translucent hub backdrop where tiles sit; the hex rail is a separate overlay."""
+"""Translucent hub backdrop where tiles sit; the network rail is a separate overlay."""
 
 from __future__ import annotations
 

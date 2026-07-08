@@ -43,6 +43,17 @@ def _parse_nm(text: str) -> float | None:
     return None
 
 
+def _extract_glossary_term(text: str) -> str:
+    """Pull the subject out of an "explain/define/what does X mean" phrase."""
+    m = re.search(r"\bwhat(?:'s| is| does)\b\s*(.*?)\s*\bmean\b", text)
+    if m and m.group(1).strip():
+        return m.group(1).strip(" ?.!")
+    m = re.search(r"\b(?:explain|define|glossary)\b\s*(?:what\s+)?(.*)", text)
+    if m and m.group(1).strip():
+        return m.group(1).strip(" ?.!")
+    return text.strip()
+
+
 def parse_simulation_duration(text: str) -> float | None:
     """Parse run length from phrases like ``20s``, ``30 seconds``, or ``1 minute``."""
     t = text.strip().lower()
@@ -64,6 +75,11 @@ def parse_intent(text: str) -> Intent | None:
     if re.match(r"^help(\s+.*)?$", t):
         topic = text.strip()[4:].strip() if len(text.strip()) > 4 else ""
         return Intent("help", {"topic": topic}, text)
+
+    if re.search(r"\b(explain|define|glossary)\b", t) or re.search(
+        r"\bwhat(?:'s| is| does)\b.*\bmean\b", t
+    ):
+        return Intent("explain_concept", {"term": _extract_glossary_term(t)}, text)
 
     if re.search(r"\b(stop|end)\b.*\bsimulation\b", t) or t in ("stop simulation", "end simulation"):
         return Intent("stop_simulation", {}, text)
@@ -90,7 +106,12 @@ def parse_intent(text: str) -> Intent | None:
     if re.search(r"\b(beam waist|beam size|spot size|1/e|tell me the beam)\b", t):
         return Intent("report_beam_waist", {}, text)
 
-    if re.search(r"\b(efficiency|coupling|eta)\b", t) and "wavelength" not in t and "lambda" not in t:
+    if (
+        re.search(r"\b(efficiency|coupling|eta)\b", t)
+        and "wavelength" not in t
+        and "lambda" not in t
+        and not re.search(r"\b(calibrate|set|baseline)\b", t)
+    ):
         return Intent("report_efficiency", {}, text)
 
     # --- Wavelength set / source selection (before generic wavelength report) ---

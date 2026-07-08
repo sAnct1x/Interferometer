@@ -14,20 +14,12 @@ def panel_corner_radius(rect: QRectF, *, scale: float = 1.0) -> float:
     return max(6.0, base) * scale
 
 
-def tile_panel_path(
-    rect: QRectF,
-    *,
-    shape: str = "rounded",
-    phase: int = 0,
-    interlock: float = 0.07,
-) -> QPainterPath:
+def tile_panel_path(rect: QRectF, *, shape: str = "rounded") -> QPainterPath:
     """Rounded-rectangle tile outline.
 
-    The ``shape``/``phase``/``interlock`` parameters are retained for backwards
-    compatibility with existing callers; every tile now uses a single, consistent
-    rounded silhouette so the UI reads as clean curved panels.
+    ``shape`` only matters for the "wide" variant (tighter corner radius on
+    very wide tiles); every tile renders as one consistent rounded silhouette.
     """
-    del phase, interlock
     scale = 0.7 if shape == "wide" else 1.0
     radius = panel_corner_radius(rect, scale=scale)
     path = QPainterPath()

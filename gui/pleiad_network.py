@@ -14,17 +14,22 @@ _TAU = math.tau
 
 
 class _Node:
-    __slots__ = ("x", "y", "z", "vx", "vy", "vz", "pulse", "hue")
+    __slots__ = ("x", "y", "z", "vx", "vy", "vz", "pulse", "hue", "size_bias")
 
     def __init__(self, x: float, y: float, z: float) -> None:
         self.x = x
         self.y = y
         self.z = z
-        self.vx = random.uniform(-0.014, 0.014)
-        self.vy = random.uniform(-0.011, 0.011)
-        self.vz = random.uniform(-0.012, 0.012)
+        # Slow, graceful drift; the network should feel like it's gently
+        # floating, not buzzing around.
+        self.vx = random.uniform(-0.008, 0.008)
+        self.vy = random.uniform(-0.006, 0.006)
+        self.vz = random.uniform(-0.007, 0.007)
         self.pulse = random.uniform(0.0, _TAU)
         self.hue = random.uniform(0.0, 1.0)
+        # Per-node size so the field reads with a bit of depth even before
+        # the camera-parallax term kicks in.
+        self.size_bias = random.uniform(0.75, 1.35)
 
 
 class PleiadNetwork:
@@ -42,15 +47,23 @@ class PleiadNetwork:
         self._link_dist = 0.68
         self._yaw = 0.0
         self._x_rot = 0.0
+        # 0 = idle, 1 = fully active (Atria thinking / a simulation running).
+        # Drives a gentle brightness lift so the rail reads as alive and
+        # responsive rather than purely decorative.
+        self._activity = 0.0
 
-    def step(self, dt: float = 1.0, spin: float = 0.003) -> None:
+    def set_activity(self, level: float) -> None:
+        self._activity = max(0.0, min(1.0, level))
+
+    def step(self, dt: float = 1.0, spin: float = 0.0022) -> None:
         self._yaw = (self._yaw + spin * dt) % _TAU
-        self._x_rot = (self._x_rot + 0.0018 * dt) % _TAU
+        self._x_rot = (self._x_rot + 0.0012 * dt) % _TAU
+        pulse_rate = 0.045 + 0.02 * self._activity
         for n in self._nodes:
             n.x += n.vx * dt
             n.y += n.vy * dt
             n.z += n.vz * dt
-            n.pulse = (n.pulse + 0.065 * dt) % _TAU
+            n.pulse = (n.pulse + pulse_rate * dt) % _TAU
             if n.x > 0.98:
                 n.x = 0.98
                 n.vx *= -1.0
@@ -118,21 +131,26 @@ class PleiadNetwork:
         grad_t: float,
         pulse: float,
         depth: float,
+        size_bias: float = 1.0,
     ) -> None:
         """Radial neon sprite. Bright core, soft falloff to transparent edge."""
-        core_r = 1.35 + pulse * 0.65 + depth * 0.3
+        boost = 1.0 + 0.5 * self._activity
+        core_r = (1.35 + pulse * 0.65 + depth * 0.55) * size_bias
         glow_r = core_r * 3.8 + pulse * 1.4
         neon = self._neon_at_t(grad_t, 255)
 
+        def a(base: float, span: float) -> int:
+            return max(0, min(255, int((base + span * pulse) * boost)))
+
         outer = QRadialGradient(sx, sy, glow_r)
-        outer.setColorAt(0.0, QColor(neon.red(), neon.green(), neon.blue(), int(200 + 55 * pulse)))
-        outer.setColorAt(0.22, QColor(neon.red(), neon.green(), neon.blue(), int(120 + 50 * pulse)))
-        outer.setColorAt(0.55, QColor(neon.red(), neon.green(), neon.blue(), int(35 + 25 * pulse)))
+        outer.setColorAt(0.0, QColor(neon.red(), neon.green(), neon.blue(), a(200, 55)))
+        outer.setColorAt(0.22, QColor(neon.red(), neon.green(), neon.blue(), a(120, 50)))
+        outer.setColorAt(0.55, QColor(neon.red(), neon.green(), neon.blue(), a(35, 25)))
         outer.setColorAt(1.0, QColor(neon.red(), neon.green(), neon.blue(), 0))
 
         inner = QRadialGradient(sx, sy, core_r * 1.6)
-        inner.setColorAt(0.0, QColor(255, 255, 255, int(230 + 25 * pulse)))
-        inner.setColorAt(0.35, QColor(neon.red(), neon.green(), neon.blue(), int(210 + 45 * pulse)))
+        inner.setColorAt(0.0, QColor(255, 255, 255, a(230, 25)))
+        inner.setColorAt(0.35, QColor(neon.red(), neon.green(), neon.blue(), a(210, 45)))
         inner.setColorAt(1.0, QColor(neon.red(), neon.green(), neon.blue(), 0))
 
         painter.setPen(Qt.PenStyle.NoPen)
@@ -204,8 +222,9 @@ class PleiadNetwork:
                 mid_y = (y1 + y2) * 0.5
                 grad_t = mid_y / max(1.0, bounds_h)
                 fade = (1.0 - t_dist) ** 1.4
-                glow_col = self._neon_at_t(grad_t, int(28 * fade + 12))
-                core_col = self._neon_at_t(grad_t, int(110 * fade + 45))
+                boost = 1.0 + 0.35 * self._activity
+                glow_col = self._neon_at_t(grad_t, min(255, int((28 * fade + 12) * boost)))
+                core_col = self._neon_at_t(grad_t, min(255, int((110 * fade + 45) * boost)))
                 painter.setPen(self._thin_pen(glow_col, 0.85 * fade + 0.35))
                 painter.drawLine(int(x1), int(y1), int(x2), int(y2))
                 painter.setPen(self._thin_pen(core_col, 0.55 * fade + 0.25))
@@ -214,4 +233,4 @@ class PleiadNetwork:
         for (sx, sy, depth), node in projected:
             pulse = 0.55 + 0.45 * math.sin(node.pulse)
             grad_t = sy / max(1.0, bounds_h)
-            self._draw_node(painter, sx, sy, grad_t, pulse, depth)
+            self._draw_node(painter, sx, sy, grad_t, pulse, depth, node.size_bias)

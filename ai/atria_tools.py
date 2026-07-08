@@ -105,6 +105,17 @@ def gemini_function_declarations() -> list[types.FunctionDeclaration]:
                     description="Run length in seconds (10, 20, 30, etc.). Defaults to 20 s.",
                 )
             )
+        elif entry.intent == "explain_concept":
+            params = _schema_object(
+                term=types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "The bench term to explain, e.g. 'coupling efficiency', "
+                        "'beam waist', 'PID', 'centroid', 'ROI', 'fringe', "
+                        "'piezo creep', or 'wedge ghost'."
+                    ),
+                )
+            )
 
         decls.append(
             types.FunctionDeclaration(
@@ -163,5 +174,9 @@ def intent_from_tool_call(name: str, args: dict[str, Any] | None) -> Intent | No
         if dur is not None:
             params_sim["duration_sec"] = float(dur)
         return Intent(name, params_sim, f"tool:{name}")
+
+    if name == "explain_concept":
+        term = str(args.get("term", ""))
+        return Intent(name, {"term": term}, f"tool:{name}")
 
     return Intent(name, {}, f"tool:{name}")

@@ -9,10 +9,12 @@ from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 from config import APP_BADGE, APP_TITLE, ICONS_DIR
 from gui.glass_panel import smooth_viewport_path
 from gui.neon_theme import (
+    ACCENT_SYSTEM,
     NEON_CYAN,
     NEON_PINK,
     NEON_PURPLE,
     chrome_bar_dark_overlay,
+    draw_corner_ticks,
     draw_multicolor_glow,
     draw_neon_border,
     glass_fill_gradient,
@@ -52,14 +54,17 @@ class SplashScreen(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        from gui.ui_scale import px, splash_size
+
         self.setWindowTitle(APP_TITLE)
-        self.setFixedSize(520, 320)
+        self.setFixedSize(*splash_size())
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
 
+        margin = px(_CONTENT_MARGIN)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(_CONTENT_MARGIN, _CONTENT_MARGIN, _CONTENT_MARGIN, _CONTENT_MARGIN)
+        layout.setContentsMargins(margin, margin, margin, margin)
         layout.setSpacing(10)
 
         self._badge = QLabel(APP_BADGE)
@@ -137,6 +142,7 @@ class SplashScreen(QWidget):
         painter.setPen(QPen(QColor(244, 114, 182, 55), 1))
         painter.drawPath(inner)
         draw_neon_border(painter, path, width=2)
+        draw_corner_ticks(painter, rect.adjusted(4, 4, -4, -4), ACCENT_SYSTEM)
 
     def set_progress(self, text: str, percent: int) -> None:
         pct = max(0, min(100, int(percent)))
