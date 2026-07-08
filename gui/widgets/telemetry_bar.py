@@ -142,7 +142,7 @@ class _GlowChip(QFrame):
         value_font = QFont("Consolas", int(body))
         value_font.setBold(True)
 
-        label_text = f"{self._title} — "
+        label_text = f"{self._title}: "
         value_text = self._value_text
 
         painter.setFont(label_font)

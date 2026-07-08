@@ -28,9 +28,46 @@ DEFAULT_CAMERA_SERIAL: str | None = os.getenv("CAMERA_SERIAL") or None
 # Green laser diode (nominal)
 LASER_WAVELENGTH_NM = 520.0
 
-# Beam size target (1/e² average, µm)
+# Beam size target (1/e² average, µm). This is the waist we want at the fiber face,
+# roughly two-thirds of the fiber bore so the mode fits with margin.
 BEAM_WAIST_TARGET_UM = (280.0, 300.0)
-FIBER_TARGET_ID_UM = 300.0  # hollow-core fiber inner diameter for coupling reticle
+# Hollow-core fiber inner diameter (bore) for the coupling reticle. This is the
+# physical hole the beam must land inside, NOT the waist target above.
+FIBER_TARGET_ID_UM = 450.0
+
+# --- Wedge fiber-coupling bench geometry (520 nm) ---------------------------
+# Two 500 mm arms leave the f=500 mm curved mirror (Mirror 3), fold across the
+# flat silver mirrors (Mirrors 4 & 5), and hit the wedge near the fiber:
+#   reflect  -> Far Field camera
+#   transmit -> fiber entrance
+PATH_M3_TO_FARFIELD_MM = 500.0
+PATH_M3_TO_FIBER_MM = 500.0
+# Curved mirror focal lengths in beam order (for the optional optics helper).
+CURVED_MIRROR_FOCAL_MM = (250.0, 100.0, 500.0)
+
+# --- Piezo actuator (Thorlabs PK2JA2P1, simulated until hardware arrives) -----
+# Two single-axis PK2JA2P1 stacks replace two adjuster screws of a Newport
+# U100-A ULTIMA mount on Mirror 5, giving tip (theta_x) and tilt (theta_y).
+# Spec (Piezo Stack Report): 0.106 µm/V, 8 µm total travel at 75 V (+/-15%).
+# A DC bias holds the stack at +4 µm (mid-range) so it can push -4..+4 µm about
+# that baseline in either direction while staying in compression. The stack has
+# hysteresis, so alignment uses a PID loop on error, not open-loop stepping.
+PIEZO_MIRROR = "M5"
+PIEZO_MAX_V = 75.0
+PIEZO_TRAVEL_UM = 8.0                 # full stroke, 0..8 µm over 0..75 V
+PIEZO_BASELINE_UM = 4.0              # DC bias operating point (mid-range)
+PIEZO_EXPANSION_UM_PER_V = 0.106    # datasheet expansion rate
+PIEZO_PIVOT_ARM_MM = 15.0           # actuator-to-pivot distance on the U100-A mount
+PIEZO_STACK_MODEL = "PK2JA2P1"
+MIRROR_MOUNT_MODEL = "Newport U100-A"
+
+# Camera: Thorlabs CS165CU (Zelux 1.6 MP color CMOS). 10-bit ADC, global
+# shutter, ~34.8 fps full frame. Read noise < 4 e-. Used to make the simulated
+# feeds match what the real sensor would produce.
+CAMERA_MODEL = "Thorlabs CS165CU"
+CAMERA_ADC_BITS = 10
+CAMERA_MAX_FPS = 34.8
+CAMERA_READ_NOISE_E = 4.0
 
 # Atria backend (Gemini API key lives in .env only)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()

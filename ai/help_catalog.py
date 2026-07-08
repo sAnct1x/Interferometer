@@ -75,7 +75,7 @@ HELP_SECTIONS: tuple[tuple[str, tuple[HelpEntry, ...]], ...] = (
             HelpEntry(
                 "snap_frame",
                 "Snap frame",
-                "Capture one frame to ROI Snap Shot (works without live feed).",
+                "Capture one frame to ROI Snapshot (works without live feed).",
                 ("snap frame", "capture image"),
             ),
             HelpEntry(
@@ -162,7 +162,7 @@ HELP_SECTIONS: tuple[tuple[str, tuple[HelpEntry, ...]], ...] = (
             HelpEntry(
                 "run_simulation",
                 "Run simulation",
-                "Timed mock live feed (default 20 s) — beam, η, trends, FFT. "
+                "Timed mock live feed (default 20 s): beam, η, trends, FFT. "
                 "Say duration: run simulation 30s.",
                 (
                     "run simulation",
@@ -252,7 +252,7 @@ def format_help_text(topic: str = "") -> str:
         lines.append("")
 
     lines.append(
-        "Ask anything else in plain language — Atria uses Gemini when an API key is set."
+        "Ask anything else in plain language. Atria uses Gemini when an API key is set."
     )
     return "\n".join(lines).strip()
 

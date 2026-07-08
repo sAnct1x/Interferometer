@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 )
 
 from gui.glass_panel import GlassPanel
-from gui.typography import hint_style, muted_style, primary_style, TEXT_PRIMARY
+from gui.neon_theme import NEON_PURPLE
+from gui.typography import hint_style, muted_style, TEXT_PRIMARY
 
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
@@ -63,7 +64,7 @@ class WorkspacePanel(GlassPanel):
         self._text_view.setReadOnly(True)
         self._text_view.setStyleSheet(
             f"background: rgba(12,8,32,0.85); color: {TEXT_PRIMARY}; "
-            "border: 1px solid #a855f7; border-radius: 6px; "
+            f"border: 1px solid {NEON_PURPLE}; border-radius: 6px; "
             "font-family: Consolas; padding: 8px;"
         )
         self._stack.addWidget(self._text_view)
@@ -136,7 +137,7 @@ class WorkspacePanel(GlassPanel):
         self._current_path = path
         self._current_pixmap = pix
         name = display_name or path.name
-        self._path_label.setText(f"{name}  —  {path}")
+        self._path_label.setText(f"{name}  ·  {path}")
         scaled = pix.scaled(
             max(200, self._image_area.width() - 24),
             max(200, self._image_area.height() - 24),
@@ -149,7 +150,7 @@ class WorkspacePanel(GlassPanel):
     def _show_text(self, path: Path, text: str) -> None:
         self._current_path = path
         self._current_pixmap = None
-        self._path_label.setText(f"{path.name}  —  {path}")
+        self._path_label.setText(f"{path.name}  ·  {path}")
         lines = text.splitlines()
         if len(lines) > 800:
             preview = "\n".join(lines[:800]) + f"\n\n… ({len(lines) - 800} more lines)"

@@ -24,8 +24,8 @@ class HardwareStatusPanel(GlassPanel):
 
         rows = [
             ("λ", f"{LASER_WAVELENGTH_NM:.1f} nm", "wavelength"),
-            ("Camera A", "Idle", "camera_a"),
-            ("Camera B", "—", "camera_b"),
+            ("Far Field Cam", "Idle", "camera_far_field"),
+            ("Output Cam", "—", "camera_output"),
             ("Stage", "Disconnected", "stage"),
             ("λ scan", "Idle", "scan"),
             ("UI scale", "100%", "ui_scale"),
@@ -53,14 +53,12 @@ class HardwareStatusPanel(GlassPanel):
             lam = data["wavelength_nm"]
             if lam is not None and lam == lam:
                 self._fields["wavelength"].setText(f"{float(lam):.2f} nm")
-        # camera_a / camera_b carry the full formatted string from the dashboard.
-        # "camera" (legacy key) is treated as camera_a for backward compatibility.
-        if "camera_a" in data:
-            self._fields["camera_a"].setText(str(data["camera_a"]))
-        elif "camera" in data:
-            self._fields["camera_a"].setText(str(data["camera"]))
-        if "camera_b" in data:
-            self._fields["camera_b"].setText(str(data["camera_b"]))
+        # camera_far_field / camera_output carry the full formatted status string
+        # from the dashboard (label · S/N · state · exposure).
+        if "camera_far_field" in data:
+            self._fields["camera_far_field"].setText(str(data["camera_far_field"]))
+        if "camera_output" in data:
+            self._fields["camera_output"].setText(str(data["camera_output"]))
         if "stage" in data:
             self._fields["stage"].setText(str(data["stage"]))
         if "scan" in data:

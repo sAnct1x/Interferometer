@@ -6,19 +6,19 @@ We use a Thorcam to take a picture of the **green laser diode** spot (520 nm), d
 
 ## Step-by-step (do this every time)
 
-Open PowerShell and go to the project folder:
+Open PowerShell and go to the legacy scripts folder:
 
 ```powershell
-cd "C:\Users\origi\OneDrive\Desktop\College\OSU\2026\Summer 26"
+cd "C:\Users\origi\Documents\Interferometer\legacy"
 ```
 
-### Step 0 — Before you start
+### Step 0: Before you start
 
 1. Laser on, spot visible on the camera.
 2. **Close the ThorCam app** (Python cannot share the camera with the GUI).
 3. Keep exposure low enough that the bright center is **not a flat white blob** (not saturated).
 
-### Step 1 — Take a picture
+### Step 1: Take a picture
 
 ```powershell
 python capture_beam_frame.py
@@ -26,7 +26,7 @@ python capture_beam_frame.py
 
 A new file appears in `data\`, named like `run_003_20260611_165015_beam.tiff`.
 
-### Step 2 — Draw the box (ROI)
+### Step 2: Draw the box (ROI)
 
 ```powershell
 python save_beam_roi.py --live
@@ -42,7 +42,7 @@ In the window that opens:
 
 This saves `beam_roi_config.json`.
 
-### Step 3 — Measure the beam
+### Step 3: Measure the beam
 
 ```powershell
 python beam_size_analysis.py
@@ -50,7 +50,7 @@ python beam_size_analysis.py
 
 Read the numbers in the terminal. Open `beam_size_outputs\LATEST.txt` or the plot at `beam_size_outputs\latest\beam_analysis.png`.
 
-### Step 4 — Check that it looks right
+### Step 4: Check that it looks right
 
 | Good | Bad |
 |------|-----|
@@ -58,7 +58,7 @@ Read the numbers in the terminal. Open `beam_size_outputs\LATEST.txt` or the plo
 | X and Y close to each other (within ~15 µm) | X ≈ 300 but Y ≈ 400 |
 | Box on bright core, fringes outside | Box includes the first fringe ring |
 
-If it looks wrong, redraw the ROI (Step 2) on the same picture — you do not need a new capture unless the beam moved on the sensor.
+If it looks wrong, redraw the ROI (Step 2) on the same picture. You do not need a new capture unless the beam moved on the sensor.
 
 ```powershell
 python save_beam_roi.py --from-tiff (Get-ChildItem data\run_*_beam.tiff | Sort-Object Name | Select-Object -Last 1).FullName
@@ -75,7 +75,7 @@ python beam_size_analysis.py --mark-best
 
 ## What we are actually measuring
 
-The camera sees the laser as a bright dot, often with faint rings around it (from the interferometer). We want the size of the **bright waist** — the main hot spot — **not** the rings.
+The camera sees the laser as a bright dot, often with faint rings around it (from the interferometer). We want the size of the **bright waist**, the main hot spot, **not** the rings.
 
 The scripts:
 
@@ -114,10 +114,9 @@ Install once:
 pip install -r requirements-beam.txt
 ```
 
-The camera also needs **pylablib** and the Thorlabs ThorCam software (same setup as the interferometer project). From the repo root:
+The camera also needs **pylablib** and the Thorlabs ThorCam software (same setup as the main GUI app). Check your environment from the `legacy\` folder:
 
 ```powershell
-cd "Interferometer Project"
 python check_thorlabs_env.py
 ```
 
@@ -143,7 +142,7 @@ python save_beam_roi.py --suggest-from-tiff "data\run_001_....tiff" --threshold 
 | Problem | Fix |
 |---------|-----|
 | `No Thorcam found` | Close ThorCam app, check USB, run `check_thorlabs_env.py` |
-| Always ~361 µm | ROI too big or includes fringes — shrink box to bright core only |
+| Always ~361 µm | ROI too big or includes fringes, shrink box to bright core only |
 | X and Y very different | Recenter ROI |
 | `No ROI file found` | Run Step 2 before Step 3 |
 | ROI window errors | Make sure matplotlib can open a window; confirm with Enter when done |

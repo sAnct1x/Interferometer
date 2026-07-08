@@ -119,7 +119,7 @@ class PleiadNetwork:
         pulse: float,
         depth: float,
     ) -> None:
-        """Radial neon sprite — bright core, soft falloff to transparent edge."""
+        """Radial neon sprite. Bright core, soft falloff to transparent edge."""
         core_r = 1.35 + pulse * 0.65 + depth * 0.3
         glow_r = core_r * 3.8 + pulse * 1.4
         neon = self._neon_at_t(grad_t, 255)

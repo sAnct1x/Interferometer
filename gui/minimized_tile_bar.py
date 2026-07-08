@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.neon_theme import (
-    NEON_PINK,
+    NEON_CYAN,
     NEON_PURPLE,
     glass_fill_gradient,
     MINIMIZED_CHIP_OVERLAY_ALPHA,
@@ -55,7 +55,7 @@ class MinimizedTileChip(QWidget):
             "  padding: 0px;"
             "}"
             "QPushButton:hover {"
-            "  background: rgba(244,114,182,0.45); border: 1px solid #00f5ff;"
+            f"  background: rgba(244,114,182,0.45); border: 1px solid {NEON_CYAN};"
             "}"
         )
         min_btn = QPushButton("—")

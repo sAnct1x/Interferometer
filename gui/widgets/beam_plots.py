@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QSt
 
 from config import BEAM_WAIST_TARGET_UM, PIXEL_SIZE_UM
 from gui.glass_panel import GlassPanel, PentagonButton
+from gui.neon_theme import NEON_CYAN, NEON_PINK, NEON_PURPLE
 from gui.typography import callout_style, hint_style, style_neon_plot
 from gui.heatmap import intensity_to_rgb
 from gui.widgets.beam_surface_3d import BeamSurface3D
@@ -83,7 +84,7 @@ class BeamPlotsPanel(GlassPanel):
         self._gl_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._gl_placeholder.setStyleSheet(
             hint_style()
-            + " background: rgba(18,10,40,0.85); border: 1px dashed #a855f7; border-radius: 6px;"
+            + f" background: rgba(18,10,40,0.85); border: 1px dashed {NEON_PURPLE}; border-radius: 6px;"
         )
         self._gl_stack.addWidget(self._gl_placeholder)
 
@@ -105,13 +106,13 @@ class BeamPlotsPanel(GlassPanel):
         for p in (self._x_plot, self._y_plot):
             p.setMinimumHeight(_PROFILE_MIN_H)
             p.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._x_data = self._x_plot.plot(pen=pg.mkPen("#f472b6", width=2))
+        self._x_data = self._x_plot.plot(pen=pg.mkPen(NEON_PINK, width=2))
         self._x_fit = self._x_plot.plot(
-            pen=pg.mkPen("#00f5ff", width=2, style=Qt.PenStyle.DashLine)
+            pen=pg.mkPen(NEON_CYAN, width=2, style=Qt.PenStyle.DashLine)
         )
-        self._y_data = self._y_plot.plot(pen=pg.mkPen("#a855f7", width=2))
+        self._y_data = self._y_plot.plot(pen=pg.mkPen(NEON_PURPLE, width=2))
         self._y_fit = self._y_plot.plot(
-            pen=pg.mkPen("#00f5ff", width=2, style=Qt.PenStyle.DashLine)
+            pen=pg.mkPen(NEON_CYAN, width=2, style=Qt.PenStyle.DashLine)
         )
         profile_row.addWidget(self._x_plot, stretch=1)
         profile_row.addWidget(self._y_plot, stretch=1)

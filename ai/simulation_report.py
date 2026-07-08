@@ -77,7 +77,7 @@ def format_simulation_report(
         lines.append("FFT: insufficient samples for a peak tone estimate.")
 
     lines.append(
-        "Tiles updated: Live Camera, ROI Snap Shot, 3D beam profile, η meter, "
+        "Tiles updated: Live Camera, ROI Snapshot, 3D beam profile, η meter, "
         "alignment trends, and FFT spectrum."
     )
     return "\n".join(lines)

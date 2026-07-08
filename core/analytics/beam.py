@@ -88,7 +88,7 @@ def measurement_warnings(
     warnings: list[str] = []
     h, w = img_bs.shape
     if min(h, w) < 80:
-        warnings.append(f"ROI crop is only {w}×{h} px — include more dark margin around the beam.")
+        warnings.append(f"ROI crop is only {w}×{h} px. Include more dark margin around the beam.")
     if raw_peak > 0 and background_level / raw_peak > 0.25:
         warnings.append("Background is high vs peak; border may still be inside the halo.")
     for axis_name, profile in ("X", x_profile), ("Y", y_profile):
@@ -97,7 +97,7 @@ def measurement_warnings(
         if peak <= 0:
             continue
         if baseline / peak > 0.35:
-            warnings.append(f"{axis_name} profile edges are still bright — beam may be clipped by ROI.")
+            warnings.append(f"{axis_name} profile edges are still bright. Beam may be clipped by ROI.")
     return warnings
 
 
@@ -129,14 +129,14 @@ def _append_roi_limit_warnings(
     )
     if stuck_361:
         warnings.append(
-            "1/e² average stuck near ~361 µm — ROI includes fringes/halo, not just the bright waist."
+            "1/e² average stuck near ~361 µm. ROI includes fringes/halo, not just the bright waist."
         )
     elif severe_asymmetry:
         if x_msg:
             warnings.append(x_msg)
         if y_msg:
             warnings.append(y_msg)
-        warnings.append(f"Large X/Y mismatch ({axis_delta:.0f} µm) — recenter or resize ROI.")
+        warnings.append(f"Large X/Y mismatch ({axis_delta:.0f} µm). Recenter or resize ROI.")
 
 
 def analyze_frame(

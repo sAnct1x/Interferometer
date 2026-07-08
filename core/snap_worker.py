@@ -1,4 +1,4 @@
-"""Single-frame Thorcam capture for ROI Snap Shot and offline analysis."""
+"""Single-frame Thorcam capture for ROI Snapshot and offline analysis."""
 
 from __future__ import annotations
 

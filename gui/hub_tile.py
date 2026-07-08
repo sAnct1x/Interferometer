@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QVBoxLayout,
     QLabel,
+    QComboBox,
+    QDoubleSpinBox,
+    QSpinBox,
 )
 
 from gui.glass_panel import GlassPanel, PanelHeader
@@ -31,6 +34,9 @@ TILE_INTERLOCK: dict[str, int] = {
     "piezo": 1,
     "fft": 0,
     "tasks": 0,
+    "cam_far_field": 1,
+    "cam_image": 0,
+    "cam_output": 1,
 }
 
 TILE_SHAPES: dict[str, str] = {
@@ -46,10 +52,16 @@ TILE_SHAPES: dict[str, str] = {
     "piezo": "rounded",
     "fft": "rounded",
     "tasks": "rounded",
+    "cam_far_field": "rounded",
+    "cam_image": "rounded",
+    "cam_output": "rounded",
 }
 
 TILE_MIN_SIZES: dict[str, tuple[int, int]] = {
     "camera": (240, 360),
+    "cam_far_field": (220, 220),
+    "cam_image": (220, 220),
+    "cam_output": (220, 220),
     "roi_snapshot": (240, 360),
     "beam": (240, 220),
     "atria": (280, 260),
@@ -271,7 +283,13 @@ class HubTile(QWidget):
                 continue
             if getattr(child, "_chat_message", False) or getattr(child, "_chat_scroll", False):
                 continue
-            if isinstance(child, (QLineEdit, QPushButton, QCheckBox, QTextEdit, QPlainTextEdit, QLabel)):
+            if isinstance(
+                child,
+                (
+                    QLineEdit, QPushButton, QCheckBox, QTextEdit, QPlainTextEdit, QLabel,
+                    QComboBox, QDoubleSpinBox, QSpinBox,
+                ),
+            ):
                 continue
             composer_footer = getattr(widget, "_composer_footer", None)
             if composer_footer is not None and (

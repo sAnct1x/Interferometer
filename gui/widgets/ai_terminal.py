@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
+from config import GEMINI_API_KEY
 from gui.glass_panel import GlassPanel, PentagonButton
 from gui.neon_theme import NEON_CYAN, NEON_PINK, NEON_PURPLE
 from gui.typography import hint_style, primary_style, section_style, TEXT_MUTED, TEXT_PRIMARY
@@ -43,7 +44,7 @@ HARDWARE_INTENTS = frozenset(
 
 _LOG_FRAME_STYLE = (
     "background: rgba(18,8,40,0.55); "
-    "border: 1px solid #f472b6; border-radius: 6px;"
+    f"border: 1px solid {NEON_PINK}; border-radius: 6px;"
 )
 
 _INPUT_STYLE = (
@@ -77,7 +78,7 @@ class _ComposerInput(QPlainTextEdit):
 
 
 class _ChatMessageBlock(QTextBrowser):
-    """One chat bubble: block layout, word wrap, auto height (Atria Prime / Cortex pattern)."""
+    """One chat bubble: block layout, word wrap, auto height."""
 
     def __init__(self, role: str, text: str, parent=None) -> None:
         super().__init__(parent)
@@ -94,11 +95,11 @@ class _ChatMessageBlock(QTextBrowser):
         if role == "user":
             label, accent, body = "You", NEON_PINK, TEXT_PRIMARY
             bg = "rgba(244,114,182,0.08)"
-            border_side = "border-right: 2px solid #f472b6;"
+            border_side = f"border-right: 2px solid {NEON_PINK};"
         elif role == "atria":
             label, accent, body = "Atria", NEON_CYAN, TEXT_PRIMARY
             bg = "rgba(0,245,255,0.06)"
-            border_side = "border-left: 2px solid #00f5ff;"
+            border_side = f"border-left: 2px solid {NEON_CYAN};"
         else:
             label, accent, body = "—", TEXT_MUTED, TEXT_MUTED
             bg = "transparent"
@@ -248,7 +249,7 @@ class AtriaPanel(GlassPanel):
         reply = format_intent_reply(intent, self._telemetry)
         if intent.name in HARDWARE_INTENTS and not hardware_allowed:
             return (
-                f"{reply} Hardware control is disabled — enable "
+                f"{reply} Hardware control is disabled. Enable "
                 "“Allow hardware control” to run this action."
             )
         if intent.name not in REPORT_INTENTS:

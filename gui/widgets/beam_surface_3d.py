@@ -71,7 +71,7 @@ class BeamSurface3D:
         y_um, x_um, z_disp, z_raw, peak, _xy_span = _intensity_mesh(z, step)
         self._peak_intensity = peak
 
-        # Wireframe only — shaded faces cause z-fighting / grey triangle artifacts on Windows.
+        # Wireframe only. Shaded faces cause z-fighting / grey triangle artifacts on Windows.
         self._surface = GLSurfacePlotItem(
             x=y_um,
             y=x_um,

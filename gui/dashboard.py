@@ -23,11 +23,12 @@ from core.analytics.beam_quality import analyze_beam_quality
 from core.analytics.coupling import coupling_overlay, default_target_center
 from core.analytics.efficiency import coupling_efficiency_percent, dual_camera_efficiency_percent
 from core.analytics.interferometer import recover_wavelength_from_csv
+from core.camera_roles import ACTIVE_ROLES, CameraRole
 from core.camera_worker import CameraWorker
 from core.snap_worker import SnapWorker
 from core.simulation.frame_generator import SimulationFrameGenerator, make_simulation_frame
 from core.simulation_worker import SimulationWorker
-from core.config_store import AppConfig, CameraSlot, StageLimits, load_config, save_config
+from core.config_store import AppConfig, StageLimits, load_config, save_config
 from core.laser_wavelength import resolve_wavelength_nm
 from core.motion_control import MotionController
 from core.scan_worker import WavelengthScanWorker
@@ -43,7 +44,7 @@ from gui.minimized_tile_bar import MinimizedTileBar
 from gui.wireframe_rail import HexRailOverlay
 from gui.widgets.ai_terminal import AtriaPanel
 from gui.widgets.beam_plots import BeamPlotsPanel
-from gui.widgets.camera_view import CameraView, RoiMode
+from gui.widgets.camera_view import CameraView, PopoutCameraPanel, RoiMode
 from gui.widgets.efficiency_meter import EfficiencyMeterPanel
 from gui.widgets.hardware_status import HardwareStatusPanel
 from gui.widgets.stage_control import StageControlPanel
@@ -69,7 +70,7 @@ VIEW_MENU_TILES: tuple[tuple[str, str], ...] = (
     ("efficiency", "Beam Efficiency"),
     ("status", "System Status"),
     ("camera", "Live Camera"),
-    ("roi_snapshot", "ROI Snap Shot"),
+    ("roi_snapshot", "ROI Snapshot"),
     ("atria", "Atria Chat"),
     ("workspace", "Workspace"),
 )
@@ -84,19 +85,29 @@ TOOLS_MENU_TILES: tuple[tuple[str, str], ...] = (
 
 
 class Dashboard(QMainWindow):
-    TILE_SPECS: dict[str, tuple[str, str]] = {
-        "camera": ("Live Camera", "Phase 1 — coupling reticle"),
-        "roi_snapshot": ("ROI Snap Shot", "Phase 1 — frozen frame ROI"),
-        "beam": ("3D Beam Profile", "Phase 1 — w₀ and M²"),
-        "efficiency": ("Beam Efficiency", "Phase 1 — ground truth"),
-        "status": ("System Status", "Phase 2 — hardware matrix"),
-        "trends": ("Alignment Trends", "Phase 2 — η and w₀ history"),
-        "stage": ("Stage Control", "K-Cube jog and limits"),
-        "piezo": ("Piezo Alignment Optimizer", "Phase 3 — piezo calibration"),
-        "fft": ("Coupling Efficiency FFT", "Phase 3 — vibration spectrum"),
-        "tasks": ("Atria Task Manager", "Phase 3 — task queue"),
-        "atria": ("Atria", "Phase 2 — command console"),
-        "workspace": ("Workspace", "Review saved captures & data"),
+    TILE_SPECS: dict[str, str] = {
+        "camera": "Live Camera",
+        "roi_snapshot": "ROI Snapshot",
+        "beam": "3D Beam Profile",
+        "efficiency": "Beam Efficiency",
+        "status": "System Status",
+        "trends": "Alignment Trends",
+        "stage": "Stage Control",
+        "piezo": "Piezo Alignment Optimizer",
+        "fft": "Coupling Efficiency FFT",
+        "tasks": "Atria Task Manager",
+        "atria": "Atria",
+        "workspace": "Workspace",
+        "cam_far_field": "Far Field Camera",
+        "cam_image": "Image Camera",
+        "cam_output": "Output Camera",
+    }
+
+    # Role -> popped-out tile id for the tear-out camera tiles.
+    POPOUT_TILE_IDS: dict[str, str] = {
+        CameraRole.FAR_FIELD.value: "cam_far_field",
+        CameraRole.IMAGE.value: "cam_image",
+        CameraRole.OUTPUT.value: "cam_output",
     }
 
     def __init__(self) -> None:
@@ -150,7 +161,15 @@ class Dashboard(QMainWindow):
         self._status_panel = HardwareStatusPanel()
         self._trend_panel = TrendPanel()
         self._stage_panel = StageControlPanel()
-        self._piezo_panel = PiezoOptimizerPanel()
+        # One closed-loop engine shared by the Piezo tile and Simulation #2.
+        from gui.sim_loop import ClosedLoopSimulation
+
+        self._sim2 = ClosedLoopSimulation(self, disturbances=True)
+        self._piezo_panel = PiezoOptimizerPanel(sim=self._sim2)
+        self._popout_panels: dict[str, PopoutCameraPanel] = {
+            tile_id: PopoutCameraPanel(self.TILE_SPECS[tile_id])
+            for tile_id in self.POPOUT_TILE_IDS.values()
+        }
         self._fft_panel = FftDiagnosticsPanel()
         self._tasks_panel = TaskManagerPanel()
         self._ai_panel = AtriaPanel()
@@ -159,10 +178,10 @@ class Dashboard(QMainWindow):
         self._camera_panel.set_roi(self._cfg.beam_roi, RoiMode.BEAM)
         self._roi_snapshot_panel.set_roi(self._cfg.beam_roi, RoiMode.BEAM)
         self._stage_panel.set_stages(self._cfg.stages, active_index=0)
-        for i, slot in enumerate(self._cfg.cameras[:2]):
-            self._camera_panel.set_camera_label(i, slot.label)
+        for slot in self._cfg.cameras:
+            self._camera_panel.set_camera_label(slot.role, slot.label)
             if slot.serial:
-                self._camera_panel.set_camera_serial(i, slot.serial)
+                self._camera_panel.set_camera_serial(slot.role, slot.serial)
 
         self.setStyleSheet(
             "QMainWindow::separator { background: transparent; width: 2px; height: 2px; }"
@@ -187,24 +206,35 @@ class Dashboard(QMainWindow):
         self._min_tile_bar.close_requested.connect(self._close_tile_from_bar)
         self._min_tile_bar.hide()
 
+        # Simulation #2 flags must exist before tiles register: _register_tiles
+        # triggers visibility callbacks that read _sim2_camera_mode via
+        # _update_sim2_running().
+        self._sim2_camera_mode = False
+        self._sim2_running = False
+
         self._register_tiles()
         self._validate_menu_wiring()
         self._apply_default_visibility()
         self._build_menus()
 
         self._motion = MotionController(self)
-        self._camera_worker: CameraWorker | None = None
-        self._camera_worker_b: CameraWorker | None = None
-        self._camera_live = False
-        self._camera_live_b = False
+        # Role-keyed camera acquisition (Far Field / Image / Output).
+        self._camera_workers: dict[CameraRole, CameraWorker | None] = {
+            r: None for r in ACTIVE_ROLES
+        }
+        self._role_live: dict[CameraRole, bool] = {r: False for r in ACTIVE_ROLES}
+        self._camera_live = False  # overall live-feed state (any role active)
         # Live acquisition is paused when the Live Camera tile is hidden/minimized and
         # auto-resumed when it is shown again (see _on_camera_tile_visibility).
         self._camera_resume_on_show = False
-        self._camera_resume_on_show_b = False
-        self._last_frame_a: np.ndarray | None = None
-        self._last_frame_b: np.ndarray | None = None
-        self._last_exp_a_us: float = 1.0
-        self._last_exp_b_us: float = 1.0
+        self._last_frame: dict[CameraRole, np.ndarray | None] = {
+            r: None for r in ACTIVE_ROLES
+        }
+        self._last_exp_us: dict[CameraRole, float] = {r: 1.0 for r in ACTIVE_ROLES}
+        self._role_display_last_t: dict[CameraRole, float] = {r: 0.0 for r in ACTIVE_ROLES}
+        # Simulation #2 (piezo closed loop) shares one engine with the piezo tile.
+        # _sim2_camera_mode / _sim2_running are initialized earlier (before
+        # _register_tiles) since tile visibility callbacks read them.
         self._simulation_active = False
         self._simulation_worker: SimulationWorker | None = None
         self._simulation_generator = SimulationFrameGenerator(load_config())
@@ -218,7 +248,6 @@ class Dashboard(QMainWindow):
         self._sim_analytics_last_t: float = 0.0
         self._sim_display_last_t: float = 0.0
         self._live_display_last_t: float = 0.0
-        self._live_display_last_t_b: float = 0.0
         self._live_analytics_last_t: float = 0.0
         self._last_frame_processed_t: float = 0.0
         self._defer_screen_refit_until: float = 0.0
@@ -392,8 +421,9 @@ class Dashboard(QMainWindow):
             "atria": self._ai_panel,
             "workspace": self._workspace_panel,
         }
+        widgets.update(self._popout_panels)
         for tile_id, widget in widgets.items():
-            title, _ = self.TILE_SPECS[tile_id]
+            title = self.TILE_SPECS[tile_id]
             tile = HubTile(tile_id, title, widget, self, self._workspace)
             tile.tile_closed.connect(self._on_tile_closed)
             tile.tile_drag_released.connect(self._on_tile_drag_released)
@@ -471,6 +501,9 @@ class Dashboard(QMainWindow):
         tools_menu.addAction("Run Simulation", self._start_simulation)
         tools_menu.addAction("Stop Simulation", self._stop_simulation)
         tools_menu.addAction("Inject Synthetic Frame", self._inject_synthetic_frame)
+        tools_menu.addSeparator()
+        tools_menu.addAction("Run Simulation #2: Piezo Closed Loop", self._start_simulation_two)
+        tools_menu.addAction("Stop Simulation #2", self._stop_simulation_two)
         tools_menu.addSeparator()
         self._add_menu_tile_actions(tools_menu, TOOLS_MENU_TILES)
 
@@ -594,7 +627,7 @@ class Dashboard(QMainWindow):
         if frame is None:
             frame = self._camera_panel.current_frame()
         if frame is None:
-            self._show_error("No camera frame available — start live feed or snap a frame.")
+            self._show_error("No camera frame available. Start live feed or snap a frame.")
             return
         default = OUTPUT_DIR / "captures"
         default.mkdir(parents=True, exist_ok=True)
@@ -618,7 +651,7 @@ class Dashboard(QMainWindow):
 
     def _file_save_workspace_image(self) -> None:
         if not self._workspace_panel.has_exportable_image():
-            self._show_error("Workspace has no image to save — open an image or save a camera snapshot first.")
+            self._show_error("Workspace has no image to save. Open an image or save a camera snapshot first.")
             return
         pix = self._workspace_panel.current_pixmap()
         if pix is None:
@@ -683,7 +716,7 @@ class Dashboard(QMainWindow):
         tile._saved_geometry = tile.geometry()
         tile._minimized = True
         tile.hide()
-        title = self.TILE_SPECS[tile_id][0]
+        title = self.TILE_SPECS[tile_id]
         self._min_tile_bar.add_tile(tile_id, title)
         self._position_min_tile_bar()
         self._sync_view_menu_checks()
@@ -737,7 +770,7 @@ class Dashboard(QMainWindow):
         else:
             self._tile_layout.place_at_home(tile_id, from_saved=True)
         tile.raise_()
-        title = self.TILE_SPECS.get(tile_id, (tile_id, ""))[0]
+        title = self.TILE_SPECS.get(tile_id, tile_id)
         self._update_telemetry(status=f"Opened {title}")
         self._sync_view_menu_checks()
 
@@ -782,7 +815,7 @@ class Dashboard(QMainWindow):
             QMessageBox.information(
                 self,
                 APP_TITLE,
-                "No saved layout file yet — using built-in default homes.",
+                "No saved layout file yet, using built-in default homes.",
             )
             self._update_telemetry(status="Layout defaults applied")
 
@@ -832,6 +865,13 @@ class Dashboard(QMainWindow):
         )
 
     def _on_tile_closed(self, tile_id: str) -> None:
+        if tile_id.startswith("cam_"):
+            role = CameraRole.coerce(tile_id[len("cam_"):])
+            if self._camera_panel.is_popped(role):
+                panel = self._popout_panels.get(tile_id)
+                if panel is not None:
+                    panel.take_pane()
+                self._camera_panel.attach_pane(role)
         self._sync_view_menu_checks()
 
     def _on_tile_visibility_changed(self, tile_id: str, visible: bool) -> None:
@@ -840,6 +880,8 @@ class Dashboard(QMainWindow):
             return
         if tile_id == "camera":
             self._on_camera_tile_visibility(visible)
+        elif tile_id == "piezo":
+            self._update_sim2_running()
 
     def _on_camera_tile_visibility(self, visible: bool) -> None:
         """Pause live acquisition while the camera tile is hidden; resume on show."""
@@ -848,19 +890,13 @@ class Dashboard(QMainWindow):
                 self._camera_resume_on_show = False
                 self._start_camera()
                 self._camera_panel.set_live_active(True)
-            if self._camera_resume_on_show_b and not self._simulation_active:
-                self._camera_resume_on_show_b = False
-                self._start_camera_b()
             return
-        if self._simulation_active:
+        if self._simulation_active or self._sim2_camera_mode:
             return
         if self._camera_live:
             self._camera_resume_on_show = True
             self._stop_camera()
             self._update_telemetry(status="Camera paused (tile hidden)")
-        if self._camera_live_b:
-            self._camera_resume_on_show_b = True
-            self._stop_camera_b()
 
     # --- Signal wiring ---
 
@@ -870,8 +906,11 @@ class Dashboard(QMainWindow):
         self._camera_panel.snap_requested.connect(self._grab_single_frame)
         self._camera_panel.live_feed_toggled.connect(self._on_live_feed_toggled)
         self._camera_panel.camera_settings_changed.connect(self._on_camera_settings_changed)
-        self._camera_panel.layout_mode_changed.connect(self._on_camera_layout_changed)
         self._camera_panel.camera_label_changed.connect(self._on_camera_label_changed)
+        self._camera_panel.popout_requested.connect(self._popout_camera)
+        self._camera_panel.popin_requested.connect(self._popin_camera)
+        self._sim2.frames_ready.connect(self._on_sim2_frames)
+        self._sim2.control_tick.connect(self._on_sim2_tick)
         self._roi_snapshot_panel.roi_changed.connect(self._on_roi_snapshot_changed)
         self._roi_snapshot_panel.capture_requested.connect(self._save_current_roi)
         self._roi_snapshot_panel.analyze_requested.connect(self._on_analyze_snapshot)
@@ -906,33 +945,39 @@ class Dashboard(QMainWindow):
         else:
             self._stop_camera()
 
-    def _on_camera_settings_changed(self, settings: dict) -> None:
-        cam_idx = int(settings.get("cam_idx", 0))
-        worker_settings = {k: v for k, v in settings.items() if k != "cam_idx"}
-        if cam_idx == 0:
-            if self._camera_worker is not None and self._camera_worker.isRunning():
-                self._camera_worker.queue_settings(worker_settings)
-        else:
-            if self._camera_worker_b is not None and self._camera_worker_b.isRunning():
-                self._camera_worker_b.queue_settings(worker_settings)
+    def _live_roles(self) -> list[CameraRole]:
+        """Roles to bring up on Start Live Feed: Far Field always, others if assigned."""
+        roles = [CameraRole.FAR_FIELD]
+        for role in (CameraRole.IMAGE, CameraRole.OUTPUT):
+            slot = self._cfg.camera_by_role(role)
+            if slot is not None and slot.serial:
+                roles.append(role)
+        return roles
 
-    def _on_camera_settings_updated(self, settings: dict, cam_idx: int = 0) -> None:
-        self._camera_panel.set_camera_settings(settings, cam_idx)
+    def _on_camera_settings_changed(self, settings: dict) -> None:
+        role = CameraRole.coerce(settings.get("role", "far_field"))
+        worker_settings = {k: v for k, v in settings.items() if k != "role"}
+        worker = self._camera_workers.get(role)
+        if worker is not None and worker.isRunning():
+            worker.queue_settings(worker_settings)
+
+    def _on_camera_settings_updated(self, settings: dict, role=None) -> None:
+        role = CameraRole.FAR_FIELD if role is None else CameraRole.coerce(role)
+        self._camera_panel.set_camera_settings(settings, role)
         exp_us = settings.get("exposure_us")
         if exp_us is not None:
-            if cam_idx == 0:
-                self._last_exp_a_us = float(exp_us)
-                self._update_telemetry(camera_exposure_us=float(exp_us))
-            else:
-                self._last_exp_b_us = float(exp_us)
-                self._update_telemetry(camera_b_exposure_us=float(exp_us))
-        if cam_idx == 0:
+            self._last_exp_us[role] = float(exp_us)
+            if role == CameraRole.FAR_FIELD:
+                self._update_telemetry(far_field_exposure_us=float(exp_us))
+            elif role == CameraRole.OUTPUT:
+                self._update_telemetry(output_exposure_us=float(exp_us))
+        if role == CameraRole.FAR_FIELD:
             measured = settings.get("measured_fps")
             if measured is not None and measured > 0:
                 self._update_telemetry(camera_measured_fps=float(measured))
 
-    def _camera_exposure_label(self, cam_idx: int = 0) -> str:
-        key = "camera_exposure_us" if cam_idx == 0 else "camera_b_exposure_us"
+    def _camera_exposure_label(self, role=CameraRole.FAR_FIELD) -> str:
+        key = "far_field_exposure_us" if role == CameraRole.FAR_FIELD else "output_exposure_us"
         exp_us = self._telemetry.get(key)
         if exp_us is None:
             return "—"
@@ -940,107 +985,97 @@ class Dashboard(QMainWindow):
             return f"{exp_us / 1000:.2f} ms"
         return f"{exp_us:.0f} µs"
 
-    def _camera_a_status_label(self, status_override: str | None = None) -> str:
-        slot = self._cfg.cameras[0] if self._cfg.cameras else None
-        label = slot.label if slot else "Input"
+    def _far_field_status_label(self, status_override: str | None = None) -> str:
+        slot = self._cfg.camera_by_role(CameraRole.FAR_FIELD)
+        label = slot.label if slot else "Far Field"
         serial = slot.serial if (slot and slot.serial) else "No S/N"
         if status_override is not None:
             status = status_override
-        elif self._simulation_active:
+        elif self._simulation_active or self._sim2_camera_mode:
             status = "Simulated"
-        elif self._camera_live:
+        elif self._role_live.get(CameraRole.FAR_FIELD):
             status = "Active"
         else:
             status = "Idle"
-        exp = self._camera_exposure_label(0)
+        exp = self._camera_exposure_label(CameraRole.FAR_FIELD)
         parts = [f"{label}", f"S/N {serial}", status]
         if exp != "—":
             parts.append(exp)
         return "  ·  ".join(parts)
 
-    def _camera_b_status_label(self) -> str:
-        if len(self._cfg.cameras) < 2:
+    def _output_status_label(self) -> str:
+        slot = self._cfg.camera_by_role(CameraRole.OUTPUT)
+        if slot is None:
             return "—"
-        slot = self._cfg.cameras[1]
         label = slot.label
         serial = slot.serial if slot.serial else "No S/N"
-        status = "Active" if self._camera_live_b else "Idle"
-        exp = self._camera_exposure_label(1)
+        if self._sim2_camera_mode:
+            status = "Simulated"
+        elif self._role_live.get(CameraRole.OUTPUT):
+            status = "Active"
+        else:
+            status = "Idle"
+        exp = self._camera_exposure_label(CameraRole.OUTPUT)
         parts = [f"{label}", f"S/N {serial}", status]
         if exp != "—":
             parts.append(exp)
         return "  ·  ".join(parts)
+
+    def _start_role_worker(self, role: CameraRole) -> bool:
+        worker = self._camera_workers.get(role)
+        if worker is not None and worker.isRunning():
+            return False
+        slot = self._cfg.camera_by_role(role)
+        serial = slot.serial if slot else None
+        worker = CameraWorker(serial, self)
+        worker.frame_ready.connect(
+            lambda f, rr=role: self._on_role_frame(rr, f),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker.error.connect(lambda e, rr=role: self._on_camera_error(f"{rr.label}: {e}"))
+        if role == CameraRole.FAR_FIELD:
+            worker.status.connect(self._on_camera_status)
+        else:
+            worker.status.connect(lambda _s: None)
+        worker.connected.connect(lambda _s: self._refresh_status(camera_far_field="Active"))
+        worker.settings_updated.connect(
+            lambda s, rr=role: self._on_camera_settings_updated(s, rr)
+        )
+        worker.start()
+        self._camera_workers[role] = worker
+        self._role_live[role] = True
+        if serial:
+            self._camera_panel.set_camera_serial(role, serial)
+        return True
 
     def _start_camera(self) -> None:
         if self._simulation_active:
             self._stop_simulation()
-        if self._camera_worker is not None and self._camera_worker.isRunning():
-            return
-        serial_a = self._cfg.cameras[0].serial if self._cfg.cameras else None
-        self._camera_worker = CameraWorker(serial_a, self)
-        self._camera_worker.frame_ready.connect(self._on_frame, Qt.ConnectionType.QueuedConnection)
-        self._camera_worker.error.connect(self._on_camera_error)
-        self._camera_worker.status.connect(self._on_camera_status)
-        self._camera_worker.connected.connect(lambda _s: self._refresh_status(camera="Active"))
-        self._camera_worker.settings_updated.connect(self._on_camera_settings_updated)
-        self._defer_screen_refit_until = time.time() + 5.0
-        self._camera_worker.start()
-        self._camera_live = True
-        if serial_a:
-            self._camera_panel.set_camera_serial(0, serial_a)
-
-    def _start_camera_b(self) -> None:
-        if self._simulation_active or not self._camera_live:
-            return
-        if self._camera_worker_b is not None and self._camera_worker_b.isRunning():
-            return
-        serial_b = self._cfg.cameras[1].serial if len(self._cfg.cameras) > 1 else None
-        self._camera_worker_b = CameraWorker(serial_b, self)
-        self._camera_worker_b.frame_ready.connect(
-            self._on_frame_b, Qt.ConnectionType.QueuedConnection
-        )
-        self._camera_worker_b.error.connect(lambda e: self._show_error(f"Camera B: {e}"))
-        self._camera_worker_b.status.connect(lambda _s: None)
-        # Auto-switch to Side-by-Side when Camera B first connects
-        self._camera_worker_b.connected.connect(self._on_camera_b_connected)
-        self._camera_worker_b.settings_updated.connect(
-            lambda s: self._on_camera_settings_updated(s, cam_idx=1)
-        )
-        self._camera_worker_b.start()
-        self._camera_live_b = True
-        if serial_b:
-            self._camera_panel.set_camera_serial(1, serial_b)
-        self._refresh_status()
-
-    def _stop_camera_b(self) -> None:
-        if self._camera_worker_b is None:
-            return
-        self._camera_worker_b.stop()
-        self._camera_worker_b.wait(3000)
-        self._camera_worker_b = None
-        self._camera_live_b = False
-        self._last_frame_b = None
-        self._live_display_last_t_b = 0.0
-        self._refresh_status()
-
-    def _on_camera_b_connected(self, _serial: str) -> None:
-        """Auto-switch the camera tile to Side-by-Side once Camera B is live."""
-        from gui.widgets.camera_view import LayoutMode
-        if self._camera_panel.current_layout() == LayoutMode.INPUT_ONLY:
-            self._camera_panel.set_layout_mode(LayoutMode.SIDE_BY_SIDE)
-        self._refresh_status()
+        if self._sim2_camera_mode:
+            self._stop_simulation_two()
+        started = False
+        for role in self._live_roles():
+            if self._start_role_worker(role):
+                started = True
+        if started:
+            self._camera_live = True
+            self._defer_screen_refit_until = time.time() + 5.0
+            self._refresh_status()
 
     def _stop_camera(self) -> None:
-        if self._camera_worker is None:
-            return
-        self._camera_worker.stop()
-        self._camera_worker.wait(3000)
-        self._camera_worker = None
+        for role in list(self._camera_workers):
+            worker = self._camera_workers.get(role)
+            if worker is not None:
+                worker.stop()
+                worker.wait(3000)
+                self._camera_workers[role] = None
+            self._role_live[role] = False
+            self._last_frame[role] = None
+            self._role_display_last_t[role] = 0.0
         if self._simulation_active:
             return
         self._camera_live = False
         self._live_display_last_t = 0.0
-        self._live_display_last_t_b = 0.0
         self._last_frame_processed_t = 0.0
         self._live_analytics_last_t = 0.0
         self._last_live_overlay = None
@@ -1050,7 +1085,7 @@ class Dashboard(QMainWindow):
         self._efficiency_panel.reset()
         self._trend_panel.reset()
         self._fft_panel.reset()
-        self._refresh_status(camera="Idle")
+        self._refresh_status(camera_far_field="Idle")
         self._update_telemetry(beam_waist_um=None, efficiency_pct=None, status="Camera off")
 
     def _on_camera_error(self, message: str) -> None:
@@ -1061,75 +1096,157 @@ class Dashboard(QMainWindow):
     def _on_camera_status(self, status: str) -> None:
         self._update_telemetry(status=status)
         if "active" in status.lower():
-            self._refresh_status(camera="Active")
+            self._refresh_status(camera_far_field="Active")
 
     def _on_frame(self, frame: np.ndarray) -> None:
-        # Always keep the latest frame for on-demand analysis/efficiency.
-        self._last_frame_a = frame
+        # Far Field entry point (also used by Simulation #1's single feed).
+        self._last_frame[CameraRole.FAR_FIELD] = frame
         # Cap main-thread processing at 20 FPS regardless of camera hardware rate.
-        # The worker emits at full sensor FPS (30-100 Hz); without this guard, every
-        # queued event runs _process_frame in the main thread, saturating the UI loop.
         now = time.time()
         if now - self._last_frame_processed_t < 0.05:
             return
         self._last_frame_processed_t = now
         self._process_frame(frame)
 
-    def _on_frame_b(self, frame: np.ndarray) -> None:
-        self._last_frame_b = frame
+    def _on_role_frame(self, role: CameraRole, frame: np.ndarray) -> None:
+        if role == CameraRole.FAR_FIELD:
+            self._on_frame(frame)
+            return
+        self._last_frame[role] = frame
         now = time.time()
-        # Use a dedicated timestamp so Camera B's display is independent of Camera A's.
-        if now - self._live_display_last_t_b >= 0.1:
-            self._live_display_last_t_b = now
-            self._camera_panel.update_frame_b(frame, repaint=True)
-        else:
-            self._camera_panel.store_frame_b(frame)
-        self._compute_live_efficiency()
+        repaint = now - self._role_display_last_t.get(role, 0.0) >= 0.1
+        if repaint:
+            self._role_display_last_t[role] = now
+        self._camera_panel.set_role_frame(role, frame, repaint=repaint)
+        if role == CameraRole.OUTPUT:
+            self._compute_live_efficiency()
 
     def _compute_live_efficiency(self) -> None:
-        """Dual-camera live η: (mean_out/exp_out) / (mean_in/exp_in) vs reference."""
+        """Live η: (Output/exp_out) / (Far Field/exp_in) vs the calibrated ratio."""
         if not self._is_tile_open("efficiency"):
             return
-        if self._last_frame_a is None or self._last_frame_b is None:
+        ff = self._last_frame.get(CameraRole.FAR_FIELD)
+        out = self._last_frame.get(CameraRole.OUTPUT)
+        if ff is None or out is None:
             return
-        roi_a = self._cfg.beam_roi
-        roi_b = self._cfg.cameras[1].beam_roi if len(self._cfg.cameras) > 1 else self._cfg.beam_roi
-        mean_in = roi_mean(self._last_frame_a, roi_a)
-        mean_out = roi_mean(self._last_frame_b, roi_b)
-        exp_a = max(self._last_exp_a_us, 1.0)
-        exp_b = max(self._last_exp_b_us, 1.0)
+        roi_ff = self._cfg.beam_roi
+        out_slot = self._cfg.camera_by_role(CameraRole.OUTPUT)
+        roi_out = out_slot.beam_roi if out_slot else roi_ff
+        mean_in = roi_mean(ff, roi_ff)
+        mean_out = roi_mean(out, roi_out)
+        exp_in = max(self._last_exp_us.get(CameraRole.FAR_FIELD, 1.0), 1.0)
+        exp_out = max(self._last_exp_us.get(CameraRole.OUTPUT, 1.0), 1.0)
         eta_pct = dual_camera_efficiency_percent(
-            mean_in, mean_out, exp_a, exp_b, self._cfg.efficiency_reference_ratio
+            mean_in, mean_out, exp_in, exp_out, self._cfg.efficiency_reference_ratio
         )
         ref_set = self._cfg.efficiency_reference_ratio is not None
         detail = (
-            f"In: {mean_in:.0f} cts × {exp_a:.0f} µs  |  "
-            f"Out: {mean_out:.0f} cts × {exp_b:.0f} µs"
+            f"Far Field: {mean_in:.0f} cts × {exp_in:.0f} µs  |  "
+            f"Output: {mean_out:.0f} cts × {exp_out:.0f} µs"
             + ("" if ref_set else "  ·  Set η=100% to calibrate")
         )
         self._efficiency_panel.set_efficiency(eta_pct, detail=detail)
         if eta_pct is not None:
             self._update_telemetry(efficiency_pct=eta_pct)
 
-    def _on_camera_layout_changed(self, mode_str: str) -> None:
-        from gui.widgets.camera_view import LayoutMode
-        mode = LayoutMode(mode_str)
-        if mode == LayoutMode.SIDE_BY_SIDE:
-            if not self._camera_live_b and self._camera_live:
-                self._start_camera_b()
-        elif mode == LayoutMode.INPUT_ONLY:
-            if self._camera_live_b:
-                self._stop_camera_b()
-        elif mode == LayoutMode.OUTPUT_ONLY:
-            if self._camera_live_b:
-                pass  # keep B running
-            elif self._camera_live:
-                self._start_camera_b()
-
-    def _on_camera_label_changed(self, cam_idx: int, label: str) -> None:
-        if cam_idx < len(self._cfg.cameras):
-            self._cfg.cameras[cam_idx].label = label
+    def _on_camera_label_changed(self, role_value: str, label: str) -> None:
+        slot = self._cfg.camera_by_role(role_value)
+        if slot is not None:
+            slot.label = label
             save_config(self._cfg)
+
+    # --- Camera pop-out tiles (tear a feed into its own draggable tile) ---
+
+    def _popout_camera(self, role_value: str) -> None:
+        role = CameraRole.coerce(role_value)
+        if self._camera_panel.is_popped(role):
+            self._return_popout_pane(role)
+            return
+        tile_id = self.POPOUT_TILE_IDS.get(role.value)
+        if tile_id is None:
+            return
+        pane = self._camera_panel.detach_pane(role)
+        if pane is None:
+            return
+        self._popout_panels[tile_id].set_pane(pane)
+        self.show_tile(tile_id)
+        self._log_action(f"{role.label} camera popped out to its own tile")
+
+    def _popin_camera(self, role_value: str) -> None:
+        self._return_popout_pane(CameraRole.coerce(role_value))
+
+    def _return_popout_pane(self, role: CameraRole) -> None:
+        tile_id = self.POPOUT_TILE_IDS.get(role.value)
+        if tile_id is None or not self._camera_panel.is_popped(role):
+            return
+        self._popout_panels[tile_id].take_pane()
+        self._camera_panel.attach_pane(role)
+        self.hide_tile(tile_id)
+
+    # --- Simulation #2 (piezo closed loop, folded into the hub) ---
+
+    def _update_sim2_running(self) -> None:
+        """Run the shared closed loop while the Piezo tile is open or Sim #2 is on."""
+        want = self._sim2_camera_mode or self._is_tile_open("piezo")
+        if want and not self._sim2_running:
+            self._sim2.start()
+            self._sim2_running = True
+        elif not want and self._sim2_running:
+            self._sim2.stop()
+            self._sim2_running = False
+
+    def _start_simulation_two(self) -> None:
+        if self._simulation_active:
+            self._stop_simulation()
+        if self._camera_live:
+            self._stop_camera()
+        self._sim2_camera_mode = True
+        self._camera_panel.set_live_active(True, simulation=True)
+        self._sim2.connect_driver()
+        self._sim2.set_auto(True)
+        if hasattr(self._piezo_panel, "sync_buttons"):
+            self._piezo_panel.sync_buttons()
+        self._update_sim2_running()
+        for tile_id in ("camera", "piezo", "efficiency"):
+            self.show_tile(tile_id)
+        self._log_action("Simulation #2 (piezo closed loop) started")
+        self._update_telemetry(status="Simulation #2: piezo closed loop", laser="Simulated")
+
+    def _stop_simulation_two(self) -> None:
+        if not self._sim2_camera_mode:
+            return
+        self._sim2_camera_mode = False
+        self._sim2.set_auto(False)
+        if hasattr(self._piezo_panel, "sync_buttons"):
+            self._piezo_panel.sync_buttons()
+        self._update_sim2_running()
+        self._camera_panel.set_live_active(False)
+        self._camera_panel.show_idle()
+        self._camera_panel.set_coupling_overlay(None)
+        self._refresh_status(camera_far_field="Idle")
+        self._update_telemetry(status="Simulation #2 stopped", laser="Manual")
+        self._log_action("Simulation #2 stopped")
+
+    def _on_sim2_frames(self, frames: dict) -> None:
+        if not self._sim2_camera_mode:
+            return
+        for role, payload in frames.items():
+            self._camera_panel.set_role_frame(role, payload["frame"], repaint=True)
+            overlay = payload.get("overlay")
+            if overlay is not None:
+                self._camera_panel.set_coupling_overlay(overlay, role)
+
+    def _on_sim2_tick(self, rec: dict) -> None:
+        if not self._sim2_camera_mode:
+            return
+        self._camera_panel.set_role_metric(CameraRole.OUTPUT, f"η {rec['eta_pct']:.1f}%")
+        self._camera_panel.set_role_metric(CameraRole.FAR_FIELD, f"error {rec['err_px']:.1f} px")
+        if self._is_tile_open("efficiency"):
+            self._efficiency_panel.set_efficiency(
+                rec["eta_pct"],
+                detail="Simulation #2 · transmitted η (Far Field → Output)",
+            )
+        self._update_telemetry(efficiency_pct=rec["eta_pct"])
 
     def _process_frame(self, frame: np.ndarray) -> None:
         now = time.time()
@@ -1143,10 +1260,10 @@ class Dashboard(QMainWindow):
                 target = default_target_center(frame, roi)
                 overlay = coupling_overlay(frame, target_center_px=target, roi_xywh=roi)
                 self._camera_panel.set_coupling_overlay(overlay)
-                self._camera_panel.update_frame(frame, repaint=True)
+                self._camera_panel.set_role_frame(CameraRole.FAR_FIELD, frame, repaint=True)
                 self._last_sim_overlay = overlay
             else:
-                self._camera_panel.store_frame(frame)
+                self._camera_panel.set_role_frame(CameraRole.FAR_FIELD, frame, repaint=False)
                 overlay = self._last_sim_overlay
         elif self._camera_live:
             if now - self._live_display_last_t >= 0.1:
@@ -1154,10 +1271,10 @@ class Dashboard(QMainWindow):
                 target = default_target_center(frame, roi)
                 overlay = coupling_overlay(frame, target_center_px=target, roi_xywh=roi)
                 self._camera_panel.set_coupling_overlay(overlay)
-                self._camera_panel.update_frame(frame)
+                self._camera_panel.set_role_frame(CameraRole.FAR_FIELD, frame, repaint=True)
                 self._last_live_overlay = overlay
             else:
-                self._camera_panel.store_frame(frame)
+                self._camera_panel.set_role_frame(CameraRole.FAR_FIELD, frame, repaint=False)
                 overlay = self._last_live_overlay
 
         if overlay is None:
@@ -1177,7 +1294,7 @@ class Dashboard(QMainWindow):
         if self._roi_snapshot_panel.has_snapshot():
             if overlay is not None:
                 self._refresh_status(
-                    camera=self._camera_status_label(),
+                    camera_far_field=self._camera_status_label(),
                     coupling_err=f"{overlay['error_um']:.1f} µm",
                     coupling_ang=f"{overlay['error_angle_deg']:.0f}°",
                 )
@@ -1189,14 +1306,14 @@ class Dashboard(QMainWindow):
                 self._process_simulation_analytics(frame)
             if overlay is not None:
                 self._refresh_status(
-                    camera=self._camera_status_label(),
+                    camera_far_field=self._camera_status_label(),
                     coupling_err=f"{overlay['error_um']:.1f} µm",
                     coupling_ang=f"{overlay['error_angle_deg']:.0f}°",
                 )
             return
 
         # Beam fitting (analyze_frame + analyze_beam_quality) is expensive and only
-        # needs to run on explicit user request — click "Analyze Beam" in the beam tile.
+        # needs to run on explicit user request: click "Analyze Beam" in the beam tile.
         # Fringe-mode single-camera efficiency is lightweight (one roi_mean) so keep it live.
         if self._camera_live and now - self._live_analytics_last_t < 0.25:
             return
@@ -1220,7 +1337,7 @@ class Dashboard(QMainWindow):
 
         if overlay is not None:
             self._refresh_status(
-                camera=self._camera_status_label(),
+                camera_far_field=self._camera_status_label(),
                 coupling_err=f"{overlay['error_um']:.1f} µm",
                 coupling_ang=f"{overlay['error_angle_deg']:.0f}°",
             )
@@ -1324,7 +1441,7 @@ class Dashboard(QMainWindow):
             self._log_action(f"Atria: run simulation ({duration_sec:.0f} s)")
         else:
             self._log_action("Bench simulation started")
-        self._refresh_status(camera="Simulated", laser="Simulated")
+        self._refresh_status(camera_far_field="Simulated", laser="Simulated")
         self._update_telemetry(status="Simulation active", laser="Simulated")
 
     def _on_simulation_duration_elapsed(self) -> None:
@@ -1358,7 +1475,7 @@ class Dashboard(QMainWindow):
         self._camera_panel.set_coupling_overlay(None)
         self._fft_panel.set_monitoring(False, emit=False)
         self._log_action("Bench simulation stopped")
-        self._refresh_status(camera="Idle", laser="Manual")
+        self._refresh_status(camera_far_field="Idle", laser="Manual")
         self._update_telemetry(status="Simulation stopped", laser="Manual")
         QTimer.singleShot(0, self._complete_simulation_finalize)
 
@@ -1453,7 +1570,7 @@ class Dashboard(QMainWindow):
         self._update_telemetry(status=status)
 
     def _on_simulation_connected(self, _label: str) -> None:
-        self._refresh_status(camera="Simulated")
+        self._refresh_status(camera_far_field="Simulated")
 
     # --- ROI and snapshot ---
 
@@ -1473,8 +1590,8 @@ class Dashboard(QMainWindow):
         tile = self._tiles.get("roi_snapshot")
         if tile is not None and not tile.isVisible():
             self.show_tile("roi_snapshot")
-        self._log_action("Frame snapped to ROI Snap Shot")
-        self._update_telemetry(status="Frame snapped to ROI Snap Shot")
+        self._log_action("Frame snapped to ROI Snapshot")
+        self._update_telemetry(status="Frame snapped to ROI Snapshot")
 
     def _on_roi_snapshot_changed(self, roi: tuple[int, int, int, int]) -> None:
         mode = self._roi_snapshot_panel.current_mode()
@@ -1520,16 +1637,16 @@ class Dashboard(QMainWindow):
         result["m2"] = quality["m2"]
         self._beam_panel.update_analysis(result)
         self._trend_panel.append_sample(w0_um=w0)
-        self._log_action(f"Beam analyzed — w₀ ≈ {w0:.1f} µm")
+        self._log_action(f"Beam analyzed, w₀ ≈ {w0:.1f} µm")
         self._update_telemetry(beam_waist_um=w0, status="Beam analyzed")
 
     def _analyze_beam_snapshot(self) -> None:
         """Run a one-shot beam analysis on the latest live frame (on-demand, not live)."""
-        frame = self._last_frame_a
+        frame = self._last_frame.get(CameraRole.FAR_FIELD)
         if frame is None and self._simulation_active:
             frame = getattr(self, "_simulation_last_frame", None)
         if frame is None:
-            self._show_error("No live frame available — start the camera feed first.")
+            self._show_error("No live frame available. Start the camera feed first.")
             return
         roi = self._camera_panel.current_roi()
         crop = crop_box_from_xywh(roi)
@@ -1545,7 +1662,7 @@ class Dashboard(QMainWindow):
         self._beam_panel.update_analysis(result)
         if self._is_tile_open("trends"):
             self._trend_panel.append_sample(w0_um=w0)
-        self._log_action(f"Beam analyzed (live) — w₀ ≈ {w0:.1f} µm")
+        self._log_action(f"Beam analyzed (live), w₀ ≈ {w0:.1f} µm")
         self._update_telemetry(beam_waist_um=w0, status="Beam analyzed")
 
     # --- Wavelength scan ---
@@ -1588,7 +1705,7 @@ class Dashboard(QMainWindow):
         self._resume_live_after_scan = self._camera_live
         self._stop_camera()
         self._camera_panel.set_live_active(False)
-        self._update_telemetry(status="λ scan — connecting hardware…")
+        self._update_telemetry(status="λ scan: connecting hardware…")
 
         self._scan_worker = WavelengthScanWorker(
             roi_xywh=roi,
@@ -1818,15 +1935,18 @@ class Dashboard(QMainWindow):
         Single-camera fallback: stores the absolute fringe ROI mean as before.
         """
         self._cfg = load_config()
-        if self._last_frame_a is not None and self._last_frame_b is not None:
+        ff = self._last_frame.get(CameraRole.FAR_FIELD)
+        out = self._last_frame.get(CameraRole.OUTPUT)
+        if ff is not None and out is not None:
             roi_a = self._cfg.beam_roi
-            roi_b = self._cfg.cameras[1].beam_roi if len(self._cfg.cameras) > 1 else roi_a
-            mean_in = roi_mean(self._last_frame_a, roi_a)
-            mean_out = roi_mean(self._last_frame_b, roi_b)
-            exp_a = max(self._last_exp_a_us, 1.0)
-            exp_b = max(self._last_exp_b_us, 1.0)
+            out_slot = self._cfg.camera_by_role(CameraRole.OUTPUT)
+            roi_b = out_slot.beam_roi if out_slot else roi_a
+            mean_in = roi_mean(ff, roi_a)
+            mean_out = roi_mean(out, roi_b)
+            exp_a = max(self._last_exp_us.get(CameraRole.FAR_FIELD, 1.0), 1.0)
+            exp_b = max(self._last_exp_us.get(CameraRole.OUTPUT, 1.0), 1.0)
             if mean_in <= 0:
-                self._show_error("Input camera ROI mean is zero — is Camera A running?")
+                self._show_error("Far Field ROI mean is zero. Is the Far Field camera running?")
                 return
             ratio = (mean_out / exp_b) / (mean_in / exp_a)
             self._cfg.efficiency_reference_ratio = ratio
@@ -1840,7 +1960,7 @@ class Dashboard(QMainWindow):
                 return
             mean = roi_mean(frame, self._cfg.fringe_roi)
             if mean != mean or mean <= 0:
-                self._show_error("Fringe ROI mean invalid — check ROI.")
+                self._show_error("Fringe ROI mean invalid. Check ROI.")
                 return
             self._cfg.efficiency_reference_mean = mean
             save_config(self._cfg)
@@ -1875,7 +1995,7 @@ class Dashboard(QMainWindow):
             self._cfg = load_config()
             if self._cfg.last_wavelength_nm is None:
                 self._show_error(
-                    "No measured wavelength yet — run Scan wavelength or load a scan CSV."
+                    "No measured wavelength yet. Run Scan wavelength or load a scan CSV."
                 )
                 return
             self._cfg.wavelength_mode = "last_scan"
@@ -1977,12 +2097,12 @@ class Dashboard(QMainWindow):
         cpu_text = "—"
         if stats.cpu_percent is not None:
             cpu_text = f"{stats.cpu_percent:.1f}%"
-        # Pull an optional status override for Camera A from callers that pass camera=
-        cam_a_override = kwargs.pop("camera", None)
+        # Pull an optional status override for Far Field from callers that pass camera_far_field=
+        far_field_override = kwargs.pop("camera_far_field", None)
         payload = {
             "wavelength_nm": self._telemetry.get("wavelength_nm", LASER_WAVELENGTH_NM),
-            "camera_a": self._camera_a_status_label(cam_a_override),
-            "camera_b": self._camera_b_status_label(),
+            "camera_far_field": self._far_field_status_label(far_field_override),
+            "camera_output": self._output_status_label(),
             "laser": "Manual",
             "stage": "Connected" if self._motion.connected else "Disconnected",
             "scan": "Running" if self._scan_worker and self._scan_worker.isRunning() else "Idle",
@@ -2095,6 +2215,10 @@ class Dashboard(QMainWindow):
         if self._stats_worker.isRunning():
             self._stats_worker.wait(2000)
         self._stop_simulation()
+        self._sim2_camera_mode = False
+        if self._sim2_running:
+            self._sim2.stop()
+            self._sim2_running = False
         self._stop_camera()
         self._motion.disconnect()
         for tile in self._tiles.values():

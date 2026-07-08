@@ -71,7 +71,7 @@ class EfficiencyMeterPanel(GlassPanel):
     def reset(self) -> None:
         self.set_efficiency(
             None,
-            detail="Enable live feed · use Side-by-Side view to calibrate dual-camera η",
+            detail="Enable live feed · use Calibrate η baseline to set the reference",
         )
 
 
@@ -103,7 +103,6 @@ class _ThermoBar(QWidget):
         bar_w = max(28, inner.width() - axis_w - tick_w)
         bar = QRect(inner.left() + axis_w, inner.top(), bar_w, inner.height())
 
-        # Y-axis title
         from gui.typography import TEXT_MUTED, TEXT_PRIMARY, body_pt
 
         body = max(8.0, body_pt())
@@ -116,7 +115,6 @@ class _ThermoBar(QWidget):
             "η\n(%)",
         )
 
-        # Bar frame
         painter.fillRect(bar, QColor(15, 8, 35, 190))
         for width, alpha, color in (
             (8, 25, (255, 0, 110)),
@@ -129,7 +127,6 @@ class _ThermoBar(QWidget):
         painter.setPen(QPen(QColor(0, 245, 255, 180), 2))
         painter.drawRect(bar)
 
-        # Fill
         fill_h = int(bar.height() * self._level)
         if fill_h > 0:
             grad = QLinearGradient(0, bar.bottom(), 0, bar.top())
@@ -152,7 +149,6 @@ class _ThermoBar(QWidget):
             painter.setPen(label_pen)
             painter.drawText(bar.right() + 13, y + 4, f"{pct:.0f}%")
 
-        # Live efficiency marker at fill height
         if self._eta_pct is not None and self._eta_pct == self._eta_pct:
             live_y = bar.bottom() - int(bar.height() * self._level)
             painter.setPen(QPen(QColor(TEXT_MUTED), 2))

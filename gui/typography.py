@@ -1,4 +1,4 @@
-"""Uniform UI typography — one body size everywhere except titles."""
+"""Uniform UI typography. One body size everywhere except titles."""
 
 from __future__ import annotations
 

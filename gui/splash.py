@@ -11,6 +11,7 @@ from gui.glass_panel import smooth_viewport_path
 from gui.neon_theme import (
     NEON_CYAN,
     NEON_PINK,
+    NEON_PURPLE,
     chrome_bar_dark_overlay,
     draw_multicolor_glow,
     draw_neon_border,
@@ -18,7 +19,7 @@ from gui.neon_theme import (
     tile_dark_overlay,
     workspace_backdrop_brush,
 )
-from gui.typography import body_px, hint_style, primary_style, TEXT_MUTED, TEXT_PRIMARY, TEXT_TITLE, title_px
+from gui.typography import body_px, hint_style, primary_style, TEXT_MUTED, TEXT_TITLE, title_px
 
 
 _CORNER_RADIUS = 18.0
@@ -41,7 +42,7 @@ def _progress_stylesheet() -> str:
         "QProgressBar::chunk {"
         f"  background: qlineargradient("
         "x1:0, y1:0, x2:1, y2:0, "
-        f"stop:0 {NEON_PINK}, stop:0.55 #a855f7, stop:1 {NEON_CYAN});"
+        f"stop:0 {NEON_PINK}, stop:0.55 {NEON_PURPLE}, stop:1 {NEON_CYAN});"
         "  border-radius: 5px;"
         "}"
     )
@@ -123,7 +124,7 @@ class SplashScreen(QWidget):
         rect = self._shape_rect()
         path = self._shape_path()
 
-        # Clip all fills to rounded shape — avoids the sharp rectangular halo.
+        # Clip all fills to rounded shape. Avoids the sharp rectangular halo.
         painter.setClipPath(path)
         painter.fillPath(path, workspace_backdrop_brush(rect))
         painter.fillPath(path, glass_fill_gradient(rect, path))

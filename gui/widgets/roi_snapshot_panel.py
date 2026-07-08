@@ -1,4 +1,4 @@
-"""ROI Snap Shot tile: frozen frame heatmap with draggable ROI and analysis actions."""
+"""ROI Snapshot tile: frozen frame heatmap with draggable ROI and analysis actions."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ class RoiSnapshotPanel(GlassPanel):
     wavelength_scan_requested = Signal()
 
     def __init__(self, parent=None) -> None:
-        super().__init__(parent, title="ROI Snap Shot")
+        super().__init__(parent, title="ROI Snapshot")
         self._snapshot: np.ndarray | None = None
         self._roi: tuple[int, int, int, int] = (636, 534, 101, 101)
         self._mode = RoiMode.BEAM

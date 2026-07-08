@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize
+from PySide6.QtCore import Qt, QRect, QRectF, QSize
 from PySide6.QtGui import QBrush, QPainter, QPainterPath, QPen, QColor, QFont, QLinearGradient, QFontMetrics
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget, QSizePolicy
 
@@ -153,7 +153,7 @@ def smooth_viewport_path(rect: QRectF, radius: float = 8.0) -> QPainterPath:
 
 
 def hub_workspace_path(rect, chamfer: int = OCTAGON_CHAMFER_PX) -> QPainterPath:
-    """Main hub workspace silhouette — fully rounded to match tile panels."""
+    """Main hub workspace silhouette. Fully rounded to match tile panels."""
     if hasattr(rect, "toRectF"):
         r = rect.toRectF()
     else:

@@ -11,8 +11,9 @@ NEON_BLUE = "#3b82ff"
 NEON_PURPLE = "#a855f7"
 NEON_PINK = "#f472b6"
 NEON_MAGENTA = "#ec4899"
+NEON_VIOLET = "#a78bfa"
 
-# ── Text palette (hex) — typography imports these ──────────────────────────
+# ── Text palette (hex): typography imports these ───────────────────────────
 TEXT_PRIMARY = "#f0fbff"
 TEXT_MUTED = "#94a3b8"
 TEXT_HINT = "#64748b"
@@ -56,6 +57,7 @@ COLOR_PURPLE = QColor(168, 85, 247)
 COLOR_PINK = QColor(244, 114, 182)
 COLOR_MAGENTA = QColor(236, 72, 153)
 COLOR_HOT = QColor(255, 0, 110)
+COLOR_VIOLET = QColor(167, 139, 250)
 
 
 def draw_multicolor_glow(

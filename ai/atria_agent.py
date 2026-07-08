@@ -31,7 +31,7 @@ def time_greeting() -> str:
         label = "Good afternoon."
     else:
         label = "Good evening."
-    return f"{label} Message Atria — type help for commands."
+    return f"{label} Message Atria. Type help for commands."
 
 
 def _build_system_instruction() -> str:
@@ -200,7 +200,7 @@ class AtriaWorker(QThread):
 
             if not GEMINI_API_KEY:
                 self.error.emit(
-                    "Atria is not configured — add your API key to .env (see .env.example)."
+                    "Atria is not configured. Add your API key to .env (see .env.example)."
                 )
                 return
 
@@ -225,7 +225,7 @@ class AtriaWorker(QThread):
             self.intent_ready.emit(intent)
             return
         self.error.emit(
-            "No API key — use native phrases (type help) or add GEMINI_API_KEY to .env."
+            "No API key. Use native phrases (type help) or add GEMINI_API_KEY to .env."
         )
 
 
@@ -237,13 +237,13 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
     if intent.name == "report_beam_waist":
         w = telemetry.get("beam_waist_um")
         if w is None or w != w:
-            return "Beam waist unavailable — check camera feed and beam ROI."
+            return "Beam waist unavailable. Check camera feed and beam ROI."
         return f"Beam waist (1/e² average): {w:.1f} µm."
 
     if intent.name == "report_efficiency":
         eta = telemetry.get("efficiency_pct")
         if eta is None:
-            return "Efficiency unavailable — calibrate a reference baseline first."
+            return "Efficiency unavailable. Calibrate a reference baseline first."
         return f"Camera coupling efficiency: {eta:.1f}%."
 
     if intent.name == "report_wavelength":
@@ -261,7 +261,7 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
         if measured is not None:
             parts.append(f"Last measured: {float(measured):.2f} nm.")
         if not parts:
-            return "No wavelength on file yet — nominal default is 520 nm (green diode)."
+            return "No wavelength on file yet. Nominal default is 520 nm (green diode)."
         return " ".join(parts)
 
     if intent.name == "set_wavelength_nominal":
@@ -277,7 +277,7 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
         measured = telemetry.get("measured_wavelength_nm")
         if measured is None:
             return (
-                "No measured wavelength yet — run Scan λ (K-Cube) or load a scan CSV, "
+                "No measured wavelength yet. Run Scan λ (K-Cube) or load a scan CSV, "
                 "then ask again."
             )
         return f"Using measured wavelength: {float(measured):.2f} nm."
@@ -304,7 +304,7 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
         return "Starting live camera feed." if active else "Stopping live camera feed."
 
     if intent.name == "snap_frame":
-        return "Snapping a frame to ROI Snap Shot."
+        return "Snapping a frame to ROI Snapshot."
 
     if intent.name == "analyze_beam":
         return "Analyzing beam on the ROI snapshot (or live frame)."

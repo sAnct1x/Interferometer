@@ -23,6 +23,9 @@ from gui.neon_theme import (
     COLOR_PINK,
     COLOR_MAGENTA,
     COLOR_HOT,
+    COLOR_VIOLET,
+    NEON_CYAN,
+    NEON_PURPLE,
     VIEWPORT_FILL_ALPHA,
 )
 from core.analytics.beam import to_grayscale
@@ -31,19 +34,13 @@ _VIEWPORT_CORNER_RADIUS = 8
 _COLORBAR_WIDTH = 22
 
 
-class LayoutMode(str, Enum):
-    INPUT_ONLY = "input_only"
-    OUTPUT_ONLY = "output_only"
-    SIDE_BY_SIDE = "side_by_side"
-
-
 _FIELD_STYLE = (
     "QComboBox, QDoubleSpinBox {"
     "  min-height: 26px;"
     "  padding: 2px 6px;"
     "  background: rgba(18,8,40,0.85);"
     "  color: " + TEXT_PRIMARY + ";"
-    "  border: 1px solid #a855f7;"
+    "  border: 1px solid " + NEON_PURPLE + ";"
     "  border-radius: 4px;"
     "}"
     "QComboBox::drop-down { border: none; width: 20px; }"
@@ -58,7 +55,7 @@ _EDIT_STYLE = (
     "QLineEdit {"
     "  min-height: 20px; padding: 1px 5px;"
     "  background: rgba(18,8,40,0.95); color: " + TEXT_PRIMARY + ";"
-    "  border: 1px solid #00e5ff; border-radius: 3px;"
+    "  border: 1px solid " + NEON_CYAN + "; border-radius: 3px;"
     "}"
 )
 
@@ -90,8 +87,8 @@ class _EditableLabel(QWidget):
         pen_btn.setFixedSize(16, 16)
         pen_btn.setStyleSheet(
             "QPushButton { background: transparent; border: none; "
-            "color: #a855f7; font-size: 10px; }"
-            "QPushButton:hover { color: #00e5ff; }"
+            "color: " + NEON_PURPLE + "; font-size: 10px; }"
+            "QPushButton:hover { color: " + NEON_CYAN + "; }"
         )
         pen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         pen_btn.clicked.connect(self._start_edit)
@@ -402,7 +399,7 @@ class SnapshotRoiViewport(QWidget):
         painter.drawLine(sx, csy, sx + sw, csy)
         painter.drawLine(csx, sy, csx, sy + sh)
 
-        color = QColor("#00e5ff") if self._mode == RoiMode.BEAM else QColor("#a78bfa")
+        color = COLOR_CYAN if self._mode == RoiMode.BEAM else COLOR_VIOLET
         painter.setPen(QPen(color, 2))
         painter.drawRect(sx, sy, sw, sh)
 
@@ -445,13 +442,156 @@ class SnapshotRoiViewport(QWidget):
         painter.drawText(int(bar.right() + 2), int(bar.bottom()), f"{lo:.0f}")
 
 
+def render_frame_to_viewport(
+    viewport: OctagonalViewport,
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+    roi_mode: "RoiMode" = RoiMode.BEAM,
+) -> None:
+    """Scale ``frame`` into ``viewport`` (optionally drawing the ROI box).
+
+    Shared by the in-tile panes and the popped-out camera tiles so every
+    surface renders a role identically.
+    """
+    pix, w, h = _frame_to_pixmap(frame)
+    if roi is not None:
+        painter = QPainter(pix)
+        x, y, rw, rh = roi
+        color = COLOR_CYAN if roi_mode == RoiMode.BEAM else COLOR_VIOLET
+        painter.setPen(QPen(color, 2))
+        painter.drawRect(x, y, rw, rh)
+        painter.end()
+
+    rect = viewport.viewport_rect()
+    target = rect.adjusted(10, 10, -10, -10)
+    scaled = pix.scaled(
+        max(1, int(target.width())),
+        max(1, int(target.height())),
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.FastTransformation,
+    )
+    viewport.set_frame_pixmap(
+        scaled,
+        scale=scaled.width() / w,
+        offset_x=int(target.x() + (target.width() - scaled.width()) / 2),
+        offset_y=int(target.y() + (target.height() - scaled.height()) / 2),
+        full_size=(w, h),
+    )
+
+
+_PANE_BTN_STYLE = (
+    "QPushButton { background: rgba(18,8,40,0.7); border: 1px solid " + NEON_PURPLE + "; "
+    "border-radius: 4px; color: #d9c9ff; font-size: 11px; padding: 1px 6px; }"
+    "QPushButton:hover { border-color: " + NEON_CYAN + "; color: " + NEON_CYAN + "; }"
+)
+
+
+class RoleCameraPane(QWidget):
+    """One camera role: editable label, viewport, promote + pop-out buttons.
+
+    A single pane object is reused whether it sits in the primary slot, the
+    thumbnail strip, or a popped-out tile, so frame routing never has to care
+    where the pane currently lives.
+    """
+
+    promote_clicked = Signal(str)   # role value
+    popout_clicked = Signal(str)    # role value
+
+    def __init__(self, role, hint: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.role = role
+        self._popped = False
+        self._is_primary = True
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        self._label = _EditableLabel(role.label, "")
+        head.addWidget(self._label)
+        head.addStretch()
+        self._promote_btn = QPushButton("▣ view")
+        self._promote_btn.setToolTip("Show this camera as the primary (large) view")
+        self._promote_btn.setStyleSheet(_PANE_BTN_STYLE)
+        self._promote_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._promote_btn.clicked.connect(lambda: self.promote_clicked.emit(self.role.value))
+        head.addWidget(self._promote_btn)
+        self._popout_btn = QPushButton("⤢ pop out")
+        self._popout_btn.setToolTip("Pull this camera into its own draggable tile")
+        self._popout_btn.setStyleSheet(_PANE_BTN_STYLE)
+        self._popout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._popout_btn.clicked.connect(lambda: self.popout_clicked.emit(self.role.value))
+        head.addWidget(self._popout_btn)
+        outer.addLayout(head)
+
+        self._hint = QLabel(hint)
+        self._hint.setWordWrap(True)
+        self._hint.setStyleSheet(muted_style())
+        self._hint.setVisible(bool(hint))
+        outer.addWidget(self._hint)
+
+        self.viewport = OctagonalViewport()
+        outer.addWidget(self.viewport, stretch=1)
+
+        self._metric_label = QLabel("")
+        self._metric_label.setStyleSheet(muted_style())
+        self._metric_label.setVisible(False)
+        outer.addWidget(self._metric_label)
+
+    # -- appearance --------------------------------------------------------
+    def set_primary(self, is_primary: bool) -> None:
+        self._is_primary = is_primary
+        self._hint.setVisible(is_primary and bool(self._hint.text()))
+        self._metric_label.setVisible(is_primary and bool(self._metric_label.text()))
+        self._promote_btn.setVisible(not is_primary and not self._popped)
+        if is_primary:
+            self.setMaximumHeight(16_777_215)
+        else:
+            self.setMaximumHeight(190)
+
+    def set_popped(self, popped: bool) -> None:
+        self._popped = popped
+        self._popout_btn.setText("⤡ pop in" if popped else "⤢ pop out")
+        self._popout_btn.setToolTip(
+            "Return this camera to the Bench Cameras tile" if popped
+            else "Pull this camera into its own draggable tile"
+        )
+        self._promote_btn.setVisible(not popped and not self._is_primary)
+
+    def set_label(self, text: str) -> None:
+        self._label.set_text(text)
+
+    def set_serial(self, serial: str) -> None:
+        self._label.set_serial(serial)
+
+    def set_metric(self, text: str) -> None:
+        self._metric_label.setText(text)
+        self._metric_label.setVisible(bool(text) and self._is_primary)
+
+    def label_widget(self) -> "_EditableLabel":
+        return self._label
+
+
 class CameraView(GlassPanel):
+    """Role-aware bench camera tile: Far Field / Image / Output.
+
+    Shows one primary (large) feed plus thumbnails of the rest; click a
+    thumbnail's ``▣ view`` to promote it, or ``⤢ pop out`` to tear a camera
+    into its own tile (the dashboard creates the tile and the home view
+    reflows to the remaining feeds).
+    """
+
     snapshot_captured = Signal(object)
     snap_requested = Signal()
     live_feed_toggled = Signal(bool)
-    camera_settings_changed = Signal(object)  # dict; includes "cam_idx": 0|1
-    layout_mode_changed = Signal(str)          # LayoutMode value
-    camera_label_changed = Signal(int, str)    # (cam_idx, new_label)
+    camera_settings_changed = Signal(object)   # dict; includes "role"
+    camera_label_changed = Signal(str, str)    # (role value, new_label)
+    primary_role_changed = Signal(str)         # role value
+    popout_requested = Signal(str)             # role value
+    popin_requested = Signal(str)              # role value
 
     _DEFAULT_CAM_STATE: dict = {
         "exposure_us": 10_000.0, "fps_auto": True, "fps_hz": 30.0,
@@ -460,44 +600,88 @@ class CameraView(GlassPanel):
         "color_sensor": True, "wb_rgb": (1.0, 1.0, 1.0),
     }
 
+    _ROLE_HINTS: dict = {
+        "far_field": "Wedge ghost · coupling reticle (450 µm fiber bore)",
+        "image": "Ghost 2 imaging plane: pending mentor optics spec",
+        "output": "Post-fiber camera · transmitted power for η",
+    }
+
     def __init__(self, parent=None) -> None:
-        super().__init__(parent, title="Live Camera")
+        from core.camera_roles import ACTIVE_ROLES, CameraRole
+
+        super().__init__(parent, title="Bench Cameras")
+        self._roles = list(ACTIVE_ROLES)
+        self._CameraRole = CameraRole
         self._live_active = False
         self._simulation_feed = False
-        self._frames: list[np.ndarray | None] = [None, None]
-        self._rois: list[tuple[int, int, int, int]] = [
-            (636, 534, 101, 101), (636, 534, 101, 101),
-        ]
-        self._modes: list[RoiMode] = [RoiMode.BEAM, RoiMode.BEAM]
-        self._layout_mode = LayoutMode.INPUT_ONLY
-        self._settings_cam = 0
+        self._frames: dict = {r: None for r in self._roles}
+        self._rois: dict = {r: (636, 534, 101, 101) for r in self._roles}
+        self._mode = RoiMode.BEAM
+        self._primary_role = self._roles[0]
+        self._settings_role = self._roles[0]
+        self._popped: set = set()
         self._block_settings_signals = False
-        self._cam_state: list[dict] = [
-            dict(self._DEFAULT_CAM_STATE), dict(self._DEFAULT_CAM_STATE)
-        ]
+        self._cam_state: dict = {r: dict(self._DEFAULT_CAM_STATE) for r in self._roles}
 
         layout = QVBoxLayout(self)
-        inset = self.content_margins()
-        layout.setContentsMargins(*inset)
+        layout.setContentsMargins(*self.content_margins())
         layout.setSpacing(6)
 
-        # ── Row 1: layout + ROI mode + start/snap ───────────────────────────
+        layout.addLayout(self._build_top_row())
+        layout.addLayout(self._build_settings_row())
+        layout.addWidget(self._build_wb_row())
+
+        # ── Panes (one stable pane per role) ─────────────────────────────
+        self._panes: dict = {}
+        for role in self._roles:
+            pane = RoleCameraPane(role, self._ROLE_HINTS.get(role.value, ""))
+            pane.promote_clicked.connect(self._on_promote_clicked)
+            pane.popout_clicked.connect(self._on_popout_clicked)
+            pane.label_widget().label_changed.connect(
+                lambda t, rv=role.value: self.camera_label_changed.emit(rv, t)
+            )
+            self._panes[role] = pane
+
+        self._primary_holder = QWidget()
+        self._primary_slot = QVBoxLayout(self._primary_holder)
+        self._primary_slot.setContentsMargins(0, 0, 0, 0)
+        self._thumb_holder = QWidget()
+        self._thumb_row = QHBoxLayout(self._thumb_holder)
+        self._thumb_row.setContentsMargins(0, 0, 0, 0)
+        self._thumb_row.setSpacing(8)
+
+        vp = QVBoxLayout()
+        vp.setContentsMargins(0, 0, 0, 0)
+        vp.setSpacing(6)
+        vp.addWidget(self._primary_holder, stretch=1)
+        vp.addWidget(self._thumb_holder)
+        layout.addLayout(vp, stretch=1)
+
+        self._sync_primary_combo()
+        self._relayout_panes()
+        self._select_settings_role(self._settings_role, _refresh_ui=False)
+        self.show_idle()
+
+    # ── UI construction ──────────────────────────────────────────────────
+    def _build_top_row(self):
         r1 = QHBoxLayout()
         r1.setSpacing(8)
-        view_lbl = QLabel("View:")
-        view_lbl.setStyleSheet(muted_style())
-        r1.addWidget(view_lbl)
-        self._layout_combo = QComboBox()
-        self._layout_combo.setStyleSheet(_FIELD_STYLE)
-        self._layout_combo.addItem("Input only", LayoutMode.INPUT_ONLY.value)
-        self._layout_combo.addItem("Output only", LayoutMode.OUTPUT_ONLY.value)
-        self._layout_combo.addItem("Side-by-Side", LayoutMode.SIDE_BY_SIDE.value)
-        self._layout_combo.currentIndexChanged.connect(self._on_layout_changed)
-        r1.addWidget(self._layout_combo)
+        prim_lbl = QLabel("Primary:")
+        prim_lbl.setStyleSheet(muted_style())
+        r1.addWidget(prim_lbl)
+        self._primary_combo = QComboBox()
+        self._primary_combo.setToolTip("Choose which camera shows large in the primary view")
+        self._primary_combo.setStyleSheet(_FIELD_STYLE)
+        self._primary_combo.currentIndexChanged.connect(self._on_primary_combo_changed)
+        r1.addWidget(self._primary_combo)
 
-        self._mode_combo = QComboBox()  # backward-compat: dashboard connects to this directly
+        # ROI mode combo. Dashboard connects to this directly (kept name).
+        self._mode_combo = QComboBox()
         self._mode_combo.addItem("Beam waist ROI", RoiMode.BEAM.value)
         self._mode_combo.addItem("Fringe ROI (λ scan)", RoiMode.FRINGE.value)
+        self._mode_combo.setToolTip(
+            "Beam waist ROI: coupling/η analysis box.\nFringe ROI: legacy λ-scan box."
+        )
         self._mode_combo.setStyleSheet(_FIELD_STYLE)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         r1.addWidget(self._mode_combo)
@@ -509,21 +693,21 @@ class CameraView(GlassPanel):
         snap_btn = PentagonButton("Snap Frame", compact=True)
         snap_btn.clicked.connect(self._snap_frame)
         r1.addWidget(snap_btn)
-        layout.addLayout(r1)
+        return r1
 
-        # ── Row 2: settings cam selector + exposure / FPS ───────────────────
+    def _build_settings_row(self):
         r2 = QHBoxLayout()
         r2.setSpacing(6)
         settings_lbl = QLabel("Settings:")
         settings_lbl.setStyleSheet(muted_style())
         r2.addWidget(settings_lbl)
-        self._cam_a_btn = PentagonButton("A · Input", compact=True)
-        self._cam_a_btn.clicked.connect(lambda: self._select_settings_cam(0))
-        r2.addWidget(self._cam_a_btn)
-        self._cam_b_btn = PentagonButton("B · Output", compact=True)
-        self._cam_b_btn.clicked.connect(lambda: self._select_settings_cam(1))
-        self._cam_b_btn.setEnabled(False)
-        r2.addWidget(self._cam_b_btn)
+        self._role_btns: dict = {}
+        for role in self._roles:
+            btn = PentagonButton(role.label, compact=True)
+            btn.setToolTip(f"Edit exposure, FPS, and white balance for {role.label}")
+            btn.clicked.connect(lambda _=False, rr=role: self._select_settings_role(rr))
+            self._role_btns[role] = btn
+            r2.addWidget(btn)
 
         exp_lbl = QLabel("Exp µs")
         exp_lbl.setStyleSheet(muted_style())
@@ -559,9 +743,9 @@ class CameraView(GlassPanel):
         self._fps_live.setStyleSheet(muted_style())
         r2.addWidget(self._fps_live)
         r2.addStretch()
-        layout.addLayout(r2)
+        return r2
 
-        # ── Row 3: white balance ─────────────────────────────────────────────
+    def _build_wb_row(self):
         wb_row = QHBoxLayout()
         wb_row.setSpacing(5)
         wb_lbl = QLabel("WB")
@@ -588,120 +772,158 @@ class CameraView(GlassPanel):
         wb_row.addStretch()
         self._wb_row_widget = QWidget()
         self._wb_row_widget.setLayout(wb_row)
-        layout.addWidget(self._wb_row_widget)
+        return self._wb_row_widget
 
-        # ── Viewport area (A + B side-by-side, B hidden in single modes) ────
-        self._label_a = _EditableLabel("Input", "")
-        self._label_a.label_changed.connect(lambda t: self.camera_label_changed.emit(0, t))
-        self._label_b = _EditableLabel("Output", "")
-        self._label_b.label_changed.connect(lambda t: self.camera_label_changed.emit(1, t))
+    # ── Pane layout / primary + thumbnails ────────────────────────────────
+    def _docked_roles(self) -> list:
+        return [r for r in self._roles if r not in self._popped]
 
-        self._live_viewport = OctagonalViewport()   # Camera A — backward-compat name kept
-        self._viewport_b = OctagonalViewport()       # Camera B
+    def _relayout_panes(self) -> None:
+        for slot in (self._primary_slot, self._thumb_row):
+            while slot.count():
+                item = slot.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.setParent(None)
 
-        self._pane_a = QWidget()
-        pa = QVBoxLayout(self._pane_a)
-        pa.setContentsMargins(0, 0, 0, 0)
-        pa.setSpacing(2)
-        pa.addWidget(self._label_a)
-        pa.addWidget(self._live_viewport, stretch=1)
+        docked = self._docked_roles()
+        if not docked:
+            self._thumb_holder.setVisible(False)
+            return
+        if self._primary_role not in docked:
+            self._primary_role = docked[0]
 
-        self._pane_b = QWidget()
-        pb = QVBoxLayout(self._pane_b)
-        pb.setContentsMargins(0, 0, 0, 0)
-        pb.setSpacing(2)
-        pb.addWidget(self._label_b)
-        pb.addWidget(self._viewport_b, stretch=1)
+        primary = self._panes[self._primary_role]
+        primary.set_primary(True)
+        primary.setParent(self._primary_holder)
+        self._primary_slot.addWidget(primary)
+        primary.show()
 
-        vp_layout = QHBoxLayout()
-        vp_layout.setContentsMargins(0, 0, 0, 0)
-        vp_layout.setSpacing(8)
-        vp_layout.addWidget(self._pane_a)
-        vp_layout.addWidget(self._pane_b)
-        layout.addLayout(vp_layout, stretch=1)
+        thumbs = [r for r in docked if r != self._primary_role]
+        for role in thumbs:
+            pane = self._panes[role]
+            pane.set_primary(False)
+            pane.setParent(self._thumb_holder)
+            self._thumb_row.addWidget(pane, stretch=1)
+            pane.show()
+        self._thumb_holder.setVisible(bool(thumbs))
+        self._sync_primary_combo()
+        for role in docked:
+            self._redraw(role)
 
-        self._update_layout_visibility()
-        self._select_settings_cam(0, _refresh_ui=False)
-        self.show_idle()
+    def _sync_primary_combo(self) -> None:
+        self._block_settings_signals = True
+        try:
+            self._primary_combo.clear()
+            for role in self._docked_roles():
+                self._primary_combo.addItem(role.label, role.value)
+                if role == self._primary_role:
+                    self._primary_combo.setCurrentIndex(self._primary_combo.count() - 1)
+        finally:
+            self._block_settings_signals = False
 
-    # ── Layout management ────────────────────────────────────────────────────
+    def _on_primary_combo_changed(self) -> None:
+        if self._block_settings_signals:
+            return
+        data = self._primary_combo.currentData()
+        if data is None:
+            return
+        self.set_primary_role(self._CameraRole.coerce(data))
 
-    def _on_layout_changed(self) -> None:
-        mode = LayoutMode(self._layout_combo.currentData())
-        self._layout_mode = mode
-        self._update_layout_visibility()
-        self.layout_mode_changed.emit(mode.value)
+    def _on_promote_clicked(self, role_value: str) -> None:
+        self.set_primary_role(self._CameraRole.coerce(role_value))
 
-    def _update_layout_visibility(self) -> None:
-        mode = self._layout_mode
-        show_a = mode != LayoutMode.OUTPUT_ONLY
-        show_b = mode != LayoutMode.INPUT_ONLY
-        self._pane_a.setVisible(show_a)
-        self._pane_b.setVisible(show_b)
-        self._cam_b_btn.setEnabled(show_b)
-        if mode == LayoutMode.OUTPUT_ONLY and self._settings_cam == 0:
-            self._select_settings_cam(1, _refresh_ui=False)
-        elif mode == LayoutMode.INPUT_ONLY and self._settings_cam == 1:
-            self._select_settings_cam(0, _refresh_ui=False)
+    def set_primary_role(self, role) -> None:
+        if role in self._popped or role not in self._roles:
+            return
+        if role == self._primary_role:
+            return
+        self._primary_role = role
+        self._relayout_panes()
+        self.primary_role_changed.emit(role.value)
 
-    def _select_settings_cam(self, cam_idx: int, *, _refresh_ui: bool = True) -> None:
-        self._settings_cam = cam_idx
-        active = "QPushButton { background: rgba(168,85,247,0.4); border: 1px solid #00e5ff; color: #00e5ff; }"
-        idle = ""
-        self._cam_a_btn.setStyleSheet(active if cam_idx == 0 else idle)
-        self._cam_b_btn.setStyleSheet(active if cam_idx == 1 else idle)
-        if _refresh_ui:
-            s = self._cam_state[cam_idx]
-            self._block_settings_signals = True
-            try:
-                self._exp_spin.setRange(s.get("exp_min_us", 10.0), s.get("exp_max_us", 1_000_000.0))
-                self._exp_spin.setValue(s["exposure_us"])
-                fps_auto = s["fps_auto"]
-                self._fps_mode.setCurrentIndex(0 if fps_auto else 1)
-                self._fps_spin.setEnabled(not fps_auto)
-                self._fps_spin.setRange(s.get("fps_min", 1.0), s.get("fps_max", 120.0))
-                if not fps_auto:
-                    self._fps_spin.setValue(s["fps_hz"])
-                measured = s.get("measured_fps")
-                self._fps_live.setText(
-                    f"{measured:.1f} fps" if measured else ("auto" if fps_auto else "— fps")
-                )
-                color_ok = s["color_sensor"]
-                self._wb_row_widget.setVisible(color_ok)
-                if color_ok:
-                    for sp, v in zip(self._wb_spins, s["wb_rgb"]):
-                        sp.setValue(v)
-            finally:
-                self._block_settings_signals = False
-
-    def current_layout(self) -> LayoutMode:
-        return self._layout_mode
-
-    def set_layout_mode(self, mode: LayoutMode) -> None:
-        """Programmatically switch the layout combo (fires the normal change signal)."""
-        for i in range(self._layout_combo.count()):
-            if self._layout_combo.itemData(i) == mode.value:
-                self._layout_combo.setCurrentIndex(i)
-                return
-
-    # ── Camera label + serial ────────────────────────────────────────────────
-
-    def set_camera_label(self, cam_idx: int, label: str) -> None:
-        if cam_idx == 0:
-            self._label_a.set_text(label)
+    # ── Pop-out (dashboard drives the tile creation) ─────────────────────
+    def _on_popout_clicked(self, role_value: str) -> None:
+        role = self._CameraRole.coerce(role_value)
+        if role in self._popped:
+            self.popin_requested.emit(role.value)
         else:
-            self._label_b.set_text(label)
+            self.popout_requested.emit(role.value)
 
-    def set_camera_serial(self, cam_idx: int, serial: str) -> None:
-        if cam_idx == 0:
-            self._label_a.set_serial(serial)
-            self._cam_a_btn.setToolTip(f"Serial: {serial}")
-        else:
-            self._label_b.set_serial(serial)
-            self._cam_b_btn.setToolTip(f"Serial: {serial}")
+    def detach_pane(self, role) -> QWidget | None:
+        """Mark a role popped, remove its pane from the home view, return it."""
+        pane = self._panes.get(role)
+        if pane is None:
+            return None
+        self._popped.add(role)
+        pane.set_popped(True)
+        pane.set_primary(True)  # full-size inside its own tile
+        self._relayout_panes()
+        return pane
 
-    # ── Live state ───────────────────────────────────────────────────────────
+    def attach_pane(self, role) -> None:
+        """Return a previously popped role's pane to the home view."""
+        pane = self._panes.get(role)
+        if pane is None:
+            return
+        self._popped.discard(role)
+        pane.set_popped(False)
+        self._relayout_panes()
 
+    def is_popped(self, role) -> bool:
+        return role in self._popped
+
+    def pane_widget(self, role) -> QWidget | None:
+        return self._panes.get(role)
+
+    # ── Settings selector ────────────────────────────────────────────────
+    def _select_settings_role(self, role, *, _refresh_ui: bool = True) -> None:
+        self._settings_role = role
+        active = ("QPushButton { background: rgba(168,85,247,0.4); "
+                  "border: 1px solid " + NEON_CYAN + "; color: " + NEON_CYAN + "; }")
+        for r, btn in self._role_btns.items():
+            btn.setStyleSheet(active if r == role else "")
+        if not _refresh_ui:
+            return
+        s = self._cam_state[role]
+        self._block_settings_signals = True
+        try:
+            self._exp_spin.setRange(s.get("exp_min_us", 10.0), s.get("exp_max_us", 1_000_000.0))
+            self._exp_spin.setValue(s["exposure_us"])
+            fps_auto = s["fps_auto"]
+            self._fps_mode.setCurrentIndex(0 if fps_auto else 1)
+            self._fps_spin.setEnabled(not fps_auto)
+            self._fps_spin.setRange(s.get("fps_min", 1.0), s.get("fps_max", 120.0))
+            if not fps_auto:
+                self._fps_spin.setValue(s["fps_hz"])
+            measured = s.get("measured_fps")
+            self._fps_live.setText(
+                f"{measured:.1f} fps" if measured else ("auto" if fps_auto else "— fps")
+            )
+            color_ok = s["color_sensor"]
+            self._wb_row_widget.setVisible(color_ok)
+            if color_ok:
+                for sp, v in zip(self._wb_spins, s["wb_rgb"]):
+                    sp.setValue(v)
+        finally:
+            self._block_settings_signals = False
+
+    # ── Camera label + serial ────────────────────────────────────────────
+    def set_camera_label(self, role, label: str) -> None:
+        pane = self._panes.get(self._CameraRole.coerce(role))
+        if pane is not None:
+            pane.set_label(label)
+
+    def set_camera_serial(self, role, serial: str) -> None:
+        role = self._CameraRole.coerce(role)
+        pane = self._panes.get(role)
+        if pane is not None:
+            pane.set_serial(serial)
+        btn = self._role_btns.get(role)
+        if btn is not None:
+            btn.setToolTip(f"Serial: {serial}")
+
+    # ── Live state ────────────────────────────────────────────────────────
     def _on_live_clicked(self) -> None:
         self._live_active = not self._live_active
         self._live_btn.setText("Stop Live Feed" if self._live_active else "Start Live Feed")
@@ -713,112 +935,99 @@ class CameraView(GlassPanel):
         self._live_btn.setText("Stop Live Feed" if active else "Start Live Feed")
 
     def show_idle(self) -> None:
-        self._frames = [None, None]
-        self._live_viewport.set_idle("Live feed off\n\nStart live feed or snap a frame.")
-        self._viewport_b.set_idle("Camera B (Output)\n\nNot active")
+        for role in self._roles:
+            self._frames[role] = None
+            pane = self._panes.get(role)
+            if pane is None:
+                continue
+            if role.value == "image":
+                pane.viewport.set_idle(
+                    "Image (Ghost 2)\n\nWaiting for optical spec\n(plane, path length, dᵢ)"
+                )
+            elif role == self._primary_role:
+                pane.viewport.set_idle(f"{role.label}\n\nStart live feed or snap a frame.")
+            else:
+                pane.viewport.set_idle(f"{role.label}\n\nNot active")
 
-    # ── ROI / mode ───────────────────────────────────────────────────────────
-
+    # ── ROI / mode ─────────────────────────────────────────────────────────
     def set_roi(self, roi: tuple[int, int, int, int], mode: RoiMode | None = None) -> None:
-        self._rois[0] = roi
+        far = self._CameraRole.coerce("far_field")
+        self._rois[far] = roi
         if mode is not None:
-            self._modes[0] = mode
-            idx = 0 if mode == RoiMode.BEAM else 1
-            self._mode_combo.setCurrentIndex(idx)
-        self._redraw_live(0)
+            self._mode = mode
+            self._mode_combo.setCurrentIndex(0 if mode == RoiMode.BEAM else 1)
+        self._redraw(far)
 
-    def set_roi_b(self, roi: tuple[int, int, int, int]) -> None:
-        self._rois[1] = roi
-        self._redraw_live(1)
+    def set_role_roi(self, role, roi: tuple[int, int, int, int]) -> None:
+        self._rois[self._CameraRole.coerce(role)] = roi
+        self._redraw(self._CameraRole.coerce(role))
 
     def current_roi(self) -> tuple[int, int, int, int]:
-        return self._rois[0]
-
-    def current_roi_b(self) -> tuple[int, int, int, int]:
-        return self._rois[1]
+        return self._rois[self._CameraRole.coerce("far_field")]
 
     def current_mode(self) -> RoiMode:
-        return self._modes[0]
+        return self._mode
 
     def _on_mode_changed(self) -> None:
-        self._modes[0] = RoiMode(self._mode_combo.currentData())
+        self._mode = RoiMode(self._mode_combo.currentData())
 
-    # ── Frame pipeline ───────────────────────────────────────────────────────
-
-    def current_frame(self) -> np.ndarray | None:
-        f = self._frames[0]
+    # ── Frame pipeline ──────────────────────────────────────────────────────
+    def current_frame(self, role=None) -> np.ndarray | None:
+        role = self._primary_role if role is None else self._CameraRole.coerce(role)
+        f = self._frames.get(role)
         return f.copy() if f is not None else None
 
-    def current_frame_b(self) -> np.ndarray | None:
-        f = self._frames[1]
-        return f.copy() if f is not None else None
+    def role_frame(self, role) -> np.ndarray | None:
+        return self._frames.get(self._CameraRole.coerce(role))
 
     def _snap_frame(self) -> None:
-        frame = self._frames[self._settings_cam]
+        frame = self._frames.get(self._settings_role) or self._frames.get(self._primary_role)
         if frame is None:
             self.snap_requested.emit()
             return
         self.snapshot_captured.emit(np.asarray(frame).copy())
 
-    def update_frame(self, frame: np.ndarray, *, repaint: bool = True) -> None:
-        self._frames[0] = frame
+    def set_role_frame(self, role, frame: np.ndarray, *, repaint: bool = True) -> None:
+        role = self._CameraRole.coerce(role)
+        if role not in self._frames:
+            return
+        self._frames[role] = frame
         if repaint:
-            self._redraw_live(0)
+            self._redraw(role)
+
+    # Back-compat single-feed helpers (route to the primary role) ------------
+    def update_frame(self, frame: np.ndarray, *, repaint: bool = True) -> None:
+        self.set_role_frame(self._primary_role, frame, repaint=repaint)
 
     def store_frame(self, frame: np.ndarray) -> None:
-        self._frames[0] = frame
+        self.set_role_frame(self._primary_role, frame, repaint=False)
 
-    def update_frame_b(self, frame: np.ndarray, *, repaint: bool = True) -> None:
-        self._frames[1] = frame
-        if repaint:
-            self._redraw_live(1)
-
-    def store_frame_b(self, frame: np.ndarray) -> None:
-        self._frames[1] = frame
-
-    def _redraw_live(self, cam_idx: int = 0) -> None:
-        frame = self._frames[cam_idx]
-        if frame is None:
+    def _redraw(self, role) -> None:
+        frame = self._frames.get(role)
+        pane = self._panes.get(role)
+        if frame is None or pane is None:
             return
-        viewport = self._live_viewport if cam_idx == 0 else self._viewport_b
-        roi = self._rois[cam_idx]
-        mode = self._modes[cam_idx]
+        far = self._CameraRole.coerce("far_field")
+        roi = self._rois.get(role) if role == far else None
+        render_frame_to_viewport(pane.viewport, frame, roi=roi, roi_mode=self._mode)
 
-        pix, w, h = _frame_to_pixmap(frame)
-        painter = QPainter(pix)
-        x, y, rw, rh = roi
-        color = QColor("#00e5ff") if mode == RoiMode.BEAM else QColor("#a78bfa")
-        painter.setPen(QPen(color, 2))
-        painter.drawRect(x, y, rw, rh)
-        painter.end()
+    def set_coupling_overlay(self, overlay: dict | None, role=None) -> None:
+        role = self._CameraRole.coerce("far_field") if role is None else self._CameraRole.coerce(role)
+        pane = self._panes.get(role)
+        if pane is not None:
+            pane.viewport.set_coupling_overlay(overlay)
 
-        rect = viewport.viewport_rect()
-        target = rect.adjusted(10, 10, -10, -10)
-        scaled = pix.scaled(
-            int(target.width()),
-            int(target.height()),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation,
-        )
-        viewport.set_frame_pixmap(
-            scaled,
-            scale=scaled.width() / w,
-            offset_x=int(target.x() + (target.width() - scaled.width()) / 2),
-            offset_y=int(target.y() + (target.height() - scaled.height()) / 2),
-            full_size=(w, h),
-        )
-
-    def set_coupling_overlay(self, overlay: dict | None) -> None:
-        self._live_viewport.set_coupling_overlay(overlay)
-
-    def set_coupling_overlay_b(self, overlay: dict | None) -> None:
-        self._viewport_b.set_coupling_overlay(overlay)
+    def set_role_metric(self, role, text: str) -> None:
+        pane = self._panes.get(self._CameraRole.coerce(role))
+        if pane is not None:
+            pane.set_metric(text)
 
     # ── Camera settings (hardware readback + UI emit) ────────────────────────
-
-    def set_camera_settings(self, settings: dict, cam_idx: int = 0) -> None:
-        """Update stored settings for cam_idx; refresh controls if selected."""
-        s = self._cam_state[cam_idx]
+    def set_camera_settings(self, settings: dict, role=None) -> None:
+        role = self._settings_role if role is None else self._CameraRole.coerce(role)
+        s = self._cam_state.get(role)
+        if s is None:
+            return
         if "color_sensor" in settings:
             s["color_sensor"] = bool(settings["color_sensor"])
         if settings.get("exposure_us") is not None:
@@ -839,49 +1048,80 @@ class CameraView(GlassPanel):
             s["measured_fps"] = float(settings["measured_fps"])
         if settings.get("wb_rgb") is not None:
             s["wb_rgb"] = tuple(float(v) for v in settings["wb_rgb"][:3])
-        if cam_idx == self._settings_cam:
-            self._select_settings_cam(cam_idx, _refresh_ui=True)
+        if role == self._settings_role:
+            self._select_settings_role(role, _refresh_ui=True)
 
     def _emit_exposure(self) -> None:
         if self._block_settings_signals:
             return
         val = self._exp_spin.value()
-        self._cam_state[self._settings_cam]["exposure_us"] = val
-        self.camera_settings_changed.emit({"cam_idx": self._settings_cam, "exposure_us": val})
+        self._cam_state[self._settings_role]["exposure_us"] = val
+        self.camera_settings_changed.emit(
+            {"role": self._settings_role.value, "exposure_us": val}
+        )
 
     def _on_fps_mode_changed(self) -> None:
         fps_auto = bool(self._fps_mode.currentData())
         self._fps_spin.setEnabled(not fps_auto)
         if self._block_settings_signals:
             return
-        self._cam_state[self._settings_cam]["fps_auto"] = fps_auto
-        payload: dict = {"cam_idx": self._settings_cam, "fps_auto": fps_auto}
+        self._cam_state[self._settings_role]["fps_auto"] = fps_auto
+        payload: dict = {"role": self._settings_role.value, "fps_auto": fps_auto}
         if not fps_auto:
             payload["fps_hz"] = self._fps_spin.value()
-            self._cam_state[self._settings_cam]["fps_hz"] = payload["fps_hz"]
+            self._cam_state[self._settings_role]["fps_hz"] = payload["fps_hz"]
         self.camera_settings_changed.emit(payload)
 
     def _emit_fps(self) -> None:
         if self._block_settings_signals or bool(self._fps_mode.currentData()):
             return
         val = self._fps_spin.value()
-        self._cam_state[self._settings_cam]["fps_hz"] = val
+        self._cam_state[self._settings_role]["fps_hz"] = val
         self.camera_settings_changed.emit(
-            {"cam_idx": self._settings_cam, "fps_auto": False, "fps_hz": val}
+            {"role": self._settings_role.value, "fps_auto": False, "fps_hz": val}
         )
 
     def _emit_white_balance(self) -> None:
-        s = self._cam_state[self._settings_cam]
+        s = self._cam_state[self._settings_role]
         if self._block_settings_signals or not s["color_sensor"]:
             return
         rgb = tuple(sp.value() for sp in self._wb_spins)
         s["wb_rgb"] = rgb
-        self.camera_settings_changed.emit({"cam_idx": self._settings_cam, "wb_rgb": rgb})
+        self.camera_settings_changed.emit({"role": self._settings_role.value, "wb_rgb": rgb})
 
     def _reset_white_balance(self) -> None:
         if self._block_settings_signals:
             return
-        self.camera_settings_changed.emit({"cam_idx": self._settings_cam, "wb_rgb": None})
+        self.camera_settings_changed.emit({"role": self._settings_role.value, "wb_rgb": None})
+
+
+class PopoutCameraPanel(GlassPanel):
+    """Tile body that hosts a single popped-out camera pane (reparented in)."""
+
+    def __init__(self, title: str, parent=None) -> None:
+        super().__init__(parent, title=title)
+        self._body = QVBoxLayout(self)
+        self._body.setContentsMargins(*self.content_margins())
+        self._body.setSpacing(4)
+        self._pane: QWidget | None = None
+
+    def set_pane(self, pane: QWidget) -> None:
+        self.take_pane()
+        self._pane = pane
+        pane.setParent(self)
+        self._body.addWidget(pane)
+        pane.show()
+
+    def take_pane(self) -> QWidget | None:
+        pane = self._pane
+        if pane is not None:
+            self._body.removeWidget(pane)
+            pane.setParent(None)
+            self._pane = None
+        return pane
+
+    def has_pane(self) -> bool:
+        return self._pane is not None
 
 
 def _normalize_u8(gray: np.ndarray) -> np.ndarray:
@@ -914,7 +1154,7 @@ def _frame_to_pixmap(frame: np.ndarray) -> tuple[QPixmap, int, int]:
         else:
             # Already uint8: scale only if needed, avoid full copy otherwise
             peak = int(rgb.max())
-            if 0 < peak < 220:  # noticeably dim — auto-brighten
+            if 0 < peak < 220:  # noticeably dim, auto-brighten
                 rgb = np.clip(
                     (rgb.astype(np.float32) * (255.0 / peak)), 0, 255
                 ).astype(np.uint8)

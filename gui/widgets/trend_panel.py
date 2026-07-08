@@ -9,6 +9,7 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout
 
 from gui.glass_panel import GlassPanel
+from gui.neon_theme import NEON_CYAN, NEON_PINK, NEON_PURPLE
 from gui.typography import style_neon_plot
 
 
@@ -38,16 +39,16 @@ class TrendPanel(GlassPanel):
         self._eta_plot.setMinimumHeight(0)
         self._w0_plot.setMinimumHeight(0)
         self._eta_curve = self._eta_plot.plot(
-            pen=pg.mkPen("#00f5ff", width=2),
+            pen=pg.mkPen(NEON_CYAN, width=2),
             symbol="o",
             symbolSize=5,
-            symbolBrush="#f472b6",
+            symbolBrush=NEON_PINK,
         )
         self._w0_curve = self._w0_plot.plot(
-            pen=pg.mkPen("#f472b6", width=2),
+            pen=pg.mkPen(NEON_PINK, width=2),
             symbol="o",
             symbolSize=5,
-            symbolBrush="#a855f7",
+            symbolBrush=NEON_PURPLE,
         )
         row.addWidget(self._eta_plot)
         row.addWidget(self._w0_plot)

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from core.config_store import StageLimits
 from gui.glass_panel import GlassPanel, PentagonButton
+from gui.neon_theme import NEON_PURPLE
 from gui.typography import callout_style, muted_style, section_style, TEXT_PRIMARY
 
 _FIELD_STYLE = (
@@ -24,7 +25,7 @@ _FIELD_STYLE = (
     "  padding: 4px 8px;"
     "  background: rgba(18,8,40,0.85);"
     "  color: " + TEXT_PRIMARY + ";"
-    "  border: 1px solid #a855f7;"
+    "  border: 1px solid " + NEON_PURPLE + ";"
     "  border-radius: 4px;"
     "}"
     "QComboBox::drop-down {"

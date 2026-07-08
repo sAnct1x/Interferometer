@@ -28,7 +28,7 @@ _active_preset_id = "auto"
 
 @dataclass(frozen=True)
 class DisplayPreset:
-    """Target display profile — scales chrome, tiles, fonts, grid, and backdrop together."""
+    """Target display profile. Scales chrome, tiles, fonts, grid, and backdrop together."""
 
     id: str
     label: str
@@ -41,7 +41,7 @@ class DisplayPreset:
 
 
 DISPLAY_PRESETS: tuple[DisplayPreset, ...] = (
-    DisplayPreset("auto", "Auto — match this monitor"),
+    DisplayPreset("auto", "Auto: match this monitor"),
     DisplayPreset(
         "1440p",
         "1440p design (2560×1440)",
@@ -243,7 +243,7 @@ def chrome_bar_height(scale: float | None = None) -> int:
 
 
 def menubar_height(scale: float | None = None) -> int:
-    """Menu row height — never shrink below a usable click target."""
+    """Menu row height. Never shrink below a usable click target."""
     return max(24, px(30, scale))
 
 
@@ -256,7 +256,7 @@ def panel_header_height(scale: float | None = None) -> int:
 
 
 def grid_cell_px(scale: float | None = None) -> int:
-    """Fine workspace grid spacing — scales with the active display preset."""
+    """Fine workspace grid spacing. Scales with the active display preset."""
     return max(8, px(32, scale))
 
 

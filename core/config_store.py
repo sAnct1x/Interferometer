@@ -7,8 +7,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from config import APP_DIR, SUMMER_26_DIR, USER_CONFIG_DIR, LASER_WAVELENGTH_NM
+from config import SUMMER_26_DIR, USER_CONFIG_DIR, LASER_WAVELENGTH_NM
 from core.analytics.roi import load_roi_xywh, save_roi_xywh
+from core.camera_roles import ACTIVE_ROLES, CameraRole
 
 
 @dataclass
@@ -25,20 +26,35 @@ class StageLimits:
 
 @dataclass
 class CameraSlot:
-    """Per-camera identity and ROI stored in app_config.json."""
+    """Per-camera identity and ROI stored in app_config.json.
 
-    label: str = "Input"
+    On the three-camera wedge bench a slot is bound to a fixed ``role``
+    (far_field | image | output). Legacy two-camera files stored input/output;
+    ``CameraRole.coerce`` maps those forward on load.
+    """
+
+    label: str = "Far Field"
     serial: str | None = None
-    role: str = "input"  # "input" | "output" | "unassigned"
+    role: str = "far_field"  # far_field | image | output | unassigned
     beam_roi: tuple[int, int, int, int] = (636, 534, 101, 101)
     fringe_roi: tuple[int, int, int, int] = (333, 270, 722, 633)
 
 
 def _default_cameras() -> list[CameraSlot]:
+    """One slot per active bench role, in display order (Far Field first)."""
     return [
-        CameraSlot(label="Input", role="input"),
-        CameraSlot(label="Output", role="output"),
+        CameraSlot(label=role.label, role=role.value)
+        for role in ACTIVE_ROLES
     ]
+
+
+def _default_camera_roles() -> dict[str, str | None]:
+    """Placeholder role -> serial map for the three-camera bench.
+
+    Serials are unknown until hardware arrives; the UI picker fills these in and
+    save_config persists them. Simulation #2 ignores serials entirely.
+    """
+    return {role.value: None for role in ACTIVE_ROLES}
 
 
 @dataclass
@@ -57,9 +73,19 @@ class AppConfig:
     wavelength_mode: str = "nominal"  # nominal | last_scan | live | manual
     stages: list[StageLimits] = field(default_factory=lambda: [StageLimits()])
     cameras: list[CameraSlot] = field(default_factory=_default_cameras)
+    # role (far_field | image | output) -> camera serial for the 3-camera bench.
+    camera_roles: dict[str, str | None] = field(default_factory=_default_camera_roles)
     camera_serial: str | None = None  # kept for one-time migration only
     layout_version: int = 0
     ui_display_preset: str = "auto"
+
+    def camera_by_role(self, role) -> CameraSlot | None:
+        """Return the camera slot bound to ``role`` (accepts CameraRole or str)."""
+        want = CameraRole.coerce(role).value
+        for slot in self.cameras:
+            if CameraRole.coerce(slot.role).value == want:
+                return slot
+        return None
 
 
 def _config_path() -> Path:
@@ -109,25 +135,42 @@ def load_config() -> AppConfig:
     if not stages:
         stages = [StageLimits()]
 
-    # Migrate legacy camera_serial into cameras[0]
-    raw_cameras = data.get("cameras", [])
-    if raw_cameras:
-        cameras = []
-        for i, c in enumerate(raw_cameras):
-            defaults = {"label": "Input" if i == 0 else "Output",
-                        "role": "input" if i == 0 else "output"}
-            defaults.update(c)
-            defaults["beam_roi"] = tuple(defaults.get("beam_roi", (636, 534, 101, 101)))
-            defaults["fringe_roi"] = tuple(defaults.get("fringe_roi", (333, 270, 722, 633)))
-            cameras.append(CameraSlot(**{k: defaults[k] for k in CameraSlot.__dataclass_fields__}))
-    else:
-        cameras = _default_cameras()
-        legacy_serial = data.get("camera_serial")
-        if legacy_serial:
-            cameras[0].serial = str(legacy_serial)
+    # Build exactly one slot per active bench role, migrating any saved cameras
+    # onto their coerced role (legacy input -> far_field, output -> output).
+    saved_by_role: dict[str, dict] = {}
+    for c in data.get("cameras", []):
+        role_key = CameraRole.coerce(c.get("role")).value
+        saved_by_role.setdefault(role_key, c)  # first match wins per role
+
+    legacy_serial = data.get("camera_serial")
+    cameras: list[CameraSlot] = []
+    for role in ACTIVE_ROLES:
+        saved = saved_by_role.get(role.value, {})
+        beam_roi = tuple(saved.get("beam_roi", (636, 534, 101, 101)))
+        fringe = tuple(saved.get("fringe_roi", (333, 270, 722, 633)))
+        serial = saved.get("serial")
+        if serial is None and role is CameraRole.FAR_FIELD and legacy_serial:
+            serial = str(legacy_serial)
+        cameras.append(
+            CameraSlot(
+                label=str(saved.get("label", role.label)),
+                serial=str(serial) if serial else None,
+                role=role.value,
+                beam_roi=beam_roi,
+                fringe_roi=fringe,
+            )
+        )
 
     beam_roi = tuple(data.get("beam_roi", (636, 534, 101, 101)))
     fringe_roi = tuple(data.get("fringe_roi", (333, 270, 722, 633)))
+
+    camera_roles = _default_camera_roles()
+    raw_roles = data.get("camera_roles")
+    if isinstance(raw_roles, dict):
+        for role, serial in raw_roles.items():
+            key = CameraRole.coerce(role).value
+            if key in camera_roles:
+                camera_roles[key] = str(serial) if serial else None
 
     return AppConfig(
         beam_roi=beam_roi,
@@ -142,6 +185,7 @@ def load_config() -> AppConfig:
         wavelength_mode=data.get("wavelength_mode", "nominal"),
         stages=stages,
         cameras=cameras,
+        camera_roles=camera_roles,
         camera_serial=data.get("camera_serial"),
         layout_version=int(data.get("layout_version", 0)),
         ui_display_preset=str(data.get("ui_display_preset", "auto")),
@@ -173,7 +217,15 @@ def save_config(cfg: AppConfig) -> None:
         "wavelength_mode": cfg.wavelength_mode,
         "stages": [asdict(s) for s in cfg.stages],
         "cameras": [_cam_to_dict(c) for c in cfg.cameras],
-        "camera_serial": cfg.cameras[0].serial if cfg.cameras else None,
+        # Keep the role->serial map in lockstep with the camera slots.
+        "camera_roles": {
+            CameraRole.coerce(c.role).value: c.serial for c in cfg.cameras
+        },
+        "camera_serial": (
+            cfg.camera_by_role(CameraRole.FAR_FIELD).serial
+            if cfg.camera_by_role(CameraRole.FAR_FIELD)
+            else None
+        ),
         "layout_version": cfg.layout_version,
         "ui_display_preset": cfg.ui_display_preset,
     }
