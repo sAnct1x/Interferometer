@@ -25,6 +25,7 @@ from core.analytics.efficiency import coupling_efficiency_percent, dual_camera_e
 from core.analytics.interferometer import recover_wavelength_from_csv
 from core.camera_roles import ACTIVE_ROLES, CameraRole
 from core.camera_worker import CameraWorker
+from core.hardware_bridge import list_cameras
 from core.snap_worker import SnapWorker
 from core.simulation.frame_generator import SimulationFrameGenerator, make_simulation_frame
 from core.simulation_worker import SimulationWorker
@@ -182,6 +183,7 @@ class Dashboard(QMainWindow):
             self._camera_panel.set_camera_label(slot.role, slot.label)
             if slot.serial:
                 self._camera_panel.set_camera_serial(slot.role, slot.serial)
+        self._refresh_available_cameras()
 
         self.setStyleSheet(
             "QMainWindow::separator { background: transparent; width: 2px; height: 2px; }"
@@ -223,6 +225,10 @@ class Dashboard(QMainWindow):
             r: None for r in ACTIVE_ROLES
         }
         self._role_live: dict[CameraRole, bool] = {r: False for r in ACTIVE_ROLES}
+        # Serial each role's worker actually connected to (vs. the configured serial,
+        # which may be left on "Auto"). Used to avoid two Auto roles both grabbing the
+        # same physical camera.
+        self._role_actual_serial: dict[CameraRole, str] = {}
         self._camera_live = False  # overall live-feed state (any role active)
         # Live acquisition is paused when the Live Camera tile is hidden/minimized and
         # auto-resumed when it is shown again (see _on_camera_tile_visibility).
@@ -909,6 +915,8 @@ class Dashboard(QMainWindow):
         self._camera_panel.camera_label_changed.connect(self._on_camera_label_changed)
         self._camera_panel.popout_requested.connect(self._popout_camera)
         self._camera_panel.popin_requested.connect(self._popin_camera)
+        self._camera_panel.camera_selection_changed.connect(self._on_camera_selection_changed)
+        self._camera_panel.refresh_cameras_requested.connect(self._refresh_available_cameras)
         self._sim2.frames_ready.connect(self._on_sim2_frames)
         self._sim2.control_tick.connect(self._on_sim2_tick)
         self._roi_snapshot_panel.roi_changed.connect(self._on_roi_snapshot_changed)
@@ -1027,6 +1035,8 @@ class Dashboard(QMainWindow):
             return False
         slot = self._cfg.camera_by_role(role)
         serial = slot.serial if slot else None
+        if not serial:
+            serial = self._pick_auto_serial(role)
         worker = CameraWorker(serial, self)
         worker.frame_ready.connect(
             lambda f, rr=role: self._on_role_frame(rr, f),
@@ -1037,7 +1047,7 @@ class Dashboard(QMainWindow):
             worker.status.connect(self._on_camera_status)
         else:
             worker.status.connect(lambda _s: None)
-        worker.connected.connect(lambda _s: self._refresh_status(camera_far_field="Active"))
+        worker.connected.connect(lambda s, rr=role: self._on_role_camera_connected(rr, s))
         worker.settings_updated.connect(
             lambda s, rr=role: self._on_camera_settings_updated(s, rr)
         )
@@ -1047,6 +1057,32 @@ class Dashboard(QMainWindow):
         if serial:
             self._camera_panel.set_camera_serial(role, serial)
         return True
+
+    def _pick_auto_serial(self, role: CameraRole) -> str | None:
+        """Best-effort pick for a role left on "Auto": skip serials other roles already
+        claim, either explicitly configured or already connected this session."""
+        taken: set[str] = set()
+        for other_role in ACTIVE_ROLES:
+            if other_role == role:
+                continue
+            other_slot = self._cfg.camera_by_role(other_role)
+            if other_slot and other_slot.serial:
+                taken.add(other_slot.serial)
+            actual = self._role_actual_serial.get(other_role)
+            if actual:
+                taken.add(actual)
+        try:
+            candidates = [s for s in list_cameras() if s not in taken]
+        except Exception:
+            candidates = []
+        return candidates[0] if candidates else None
+
+    def _on_role_camera_connected(self, role: CameraRole, serial: str) -> None:
+        """Record the serial a role's worker actually connected to (useful when the
+        role was left on "Auto") and reflect it back into the device picker."""
+        self._role_actual_serial[role] = serial
+        self._camera_panel.set_camera_serial(role, serial)
+        self._refresh_status(camera_far_field="Active")
 
     def _start_camera(self) -> None:
         if self._simulation_active:
@@ -1062,16 +1098,21 @@ class Dashboard(QMainWindow):
             self._defer_screen_refit_until = time.time() + 5.0
             self._refresh_status()
 
+    def _stop_role_worker(self, role: CameraRole) -> None:
+        """Stop and release a single role's camera worker, if one is running."""
+        worker = self._camera_workers.get(role)
+        if worker is not None:
+            worker.stop()
+            worker.wait(3000)
+            self._camera_workers[role] = None
+        self._role_live[role] = False
+        self._last_frame[role] = None
+        self._role_display_last_t[role] = 0.0
+        self._role_actual_serial.pop(role, None)
+
     def _stop_camera(self) -> None:
         for role in list(self._camera_workers):
-            worker = self._camera_workers.get(role)
-            if worker is not None:
-                worker.stop()
-                worker.wait(3000)
-                self._camera_workers[role] = None
-            self._role_live[role] = False
-            self._last_frame[role] = None
-            self._role_display_last_t[role] = 0.0
+            self._stop_role_worker(role)
         if self._simulation_active:
             return
         self._camera_live = False
@@ -1154,6 +1195,38 @@ class Dashboard(QMainWindow):
         if slot is not None:
             slot.label = label
             save_config(self._cfg)
+
+    def _refresh_available_cameras(self) -> None:
+        """Rescan connected Thorcams and refresh every role's device picker."""
+        try:
+            serials = list_cameras()
+        except Exception:
+            serials = []
+        self._camera_panel.set_available_cameras(serials)
+
+    def _on_camera_selection_changed(self, role_value: str, serial: str) -> None:
+        """User picked a specific physical camera (by serial) for a bench role."""
+        role = CameraRole.coerce(role_value)
+        serial = serial or None
+        slot = self._cfg.camera_by_role(role)
+        if slot is None:
+            return
+        # Defensive: never let two roles point at the same physical camera.
+        for other_role in ACTIVE_ROLES:
+            if other_role == role:
+                continue
+            other_slot = self._cfg.camera_by_role(other_role)
+            if serial and other_slot is not None and other_slot.serial == serial:
+                other_slot.serial = None
+                self._camera_panel.set_camera_serial(other_role, "")
+        slot.serial = serial
+        save_config(self._cfg)
+        self._camera_panel.set_camera_serial(role, serial or "")
+        # Reconnect the affected worker on the fly if it's currently live.
+        if self._role_live.get(role) and not self._simulation_active and not self._sim2_camera_mode:
+            self._stop_role_worker(role)
+            self._start_role_worker(role)
+        self._refresh_status()
 
     # --- Camera pop-out tiles (tear a feed into its own draggable tile) ---
 

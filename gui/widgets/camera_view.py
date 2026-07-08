@@ -497,12 +497,15 @@ class RoleCameraPane(QWidget):
 
     promote_clicked = Signal(str)   # role value
     popout_clicked = Signal(str)    # role value
+    camera_selection_changed = Signal(str, str)   # (role value, serial or "" for auto)
 
     def __init__(self, role, hint: str = "", parent=None) -> None:
         super().__init__(parent)
         self.role = role
         self._popped = False
         self._is_primary = True
+        self._assigned_serial: str | None = None
+        self._available_serials: list[str] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -512,6 +515,15 @@ class RoleCameraPane(QWidget):
         head.setSpacing(4)
         self._label = _EditableLabel(role.label, "")
         head.addWidget(self._label)
+        cam_lbl = QLabel("Cam:")
+        cam_lbl.setStyleSheet(muted_style())
+        head.addWidget(cam_lbl)
+        self._cam_combo = QComboBox()
+        self._cam_combo.setStyleSheet(_FIELD_STYLE)
+        self._cam_combo.setMinimumWidth(88)
+        self._cam_combo.setToolTip("Pick which physical camera feeds this role")
+        self._cam_combo.currentIndexChanged.connect(self._on_cam_combo_changed)
+        head.addWidget(self._cam_combo)
         head.addStretch()
         self._promote_btn = QPushButton("▣ view")
         self._promote_btn.setToolTip("Show this camera as the primary (large) view")
@@ -566,6 +578,45 @@ class RoleCameraPane(QWidget):
 
     def set_serial(self, serial: str) -> None:
         self._label.set_serial(serial)
+        self._assigned_serial = serial or None
+        self._rebuild_cam_combo()
+
+    # -- physical camera picker --------------------------------------------
+    def set_available_cameras(self, serials: list[str]) -> None:
+        self._available_serials = list(serials)
+        self._rebuild_cam_combo()
+
+    def disable_serial_in_combo(self, serial: str) -> None:
+        """Grey out ``serial`` in this pane's picker (assigned to another role)."""
+        idx = self._cam_combo.findData(serial)
+        if idx >= 0 and idx != self._cam_combo.currentIndex():
+            item = self._cam_combo.model().item(idx)
+            if item is not None:
+                item.setEnabled(False)
+
+    def assigned_serial(self) -> str | None:
+        return self._assigned_serial
+
+    def _rebuild_cam_combo(self) -> None:
+        self._cam_combo.blockSignals(True)
+        self._cam_combo.clear()
+        self._cam_combo.addItem("Auto (first found)", "")
+        for s in self._available_serials:
+            self._cam_combo.addItem(s, s)
+        idx = 0
+        if self._assigned_serial:
+            found = self._cam_combo.findData(self._assigned_serial)
+            if found < 0:
+                self._cam_combo.addItem(self._assigned_serial, self._assigned_serial)
+                found = self._cam_combo.count() - 1
+            idx = found
+        self._cam_combo.setCurrentIndex(idx)
+        self._cam_combo.blockSignals(False)
+
+    def _on_cam_combo_changed(self) -> None:
+        serial = self._cam_combo.currentData() or ""
+        self._assigned_serial = serial or None
+        self.camera_selection_changed.emit(self.role.value, serial)
 
     def set_metric(self, text: str) -> None:
         self._metric_label.setText(text)
@@ -592,6 +643,8 @@ class CameraView(GlassPanel):
     primary_role_changed = Signal(str)         # role value
     popout_requested = Signal(str)             # role value
     popin_requested = Signal(str)              # role value
+    camera_selection_changed = Signal(str, str)  # (role value, serial or "" for auto)
+    refresh_cameras_requested = Signal()
 
     _DEFAULT_CAM_STATE: dict = {
         "exposure_us": 10_000.0, "fps_auto": True, "fps_hz": 30.0,
@@ -622,6 +675,7 @@ class CameraView(GlassPanel):
         self._popped: set = set()
         self._block_settings_signals = False
         self._cam_state: dict = {r: dict(self._DEFAULT_CAM_STATE) for r in self._roles}
+        self._available_serials: list[str] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*self.content_margins())
@@ -640,6 +694,7 @@ class CameraView(GlassPanel):
             pane.label_widget().label_changed.connect(
                 lambda t, rv=role.value: self.camera_label_changed.emit(rv, t)
             )
+            pane.camera_selection_changed.connect(self._on_pane_camera_selection_changed)
             self._panes[role] = pane
 
         self._primary_holder = QWidget()
@@ -687,6 +742,10 @@ class CameraView(GlassPanel):
         r1.addWidget(self._mode_combo)
 
         r1.addStretch()
+        self._refresh_cams_btn = PentagonButton("⟳ Cameras", compact=True)
+        self._refresh_cams_btn.setToolTip("Rescan for connected cameras")
+        self._refresh_cams_btn.clicked.connect(self.refresh_cameras_requested)
+        r1.addWidget(self._refresh_cams_btn)
         self._live_btn = PentagonButton("Start Live Feed", compact=True)
         self._live_btn.clicked.connect(self._on_live_clicked)
         r1.addWidget(self._live_btn)
@@ -922,6 +981,29 @@ class CameraView(GlassPanel):
         btn = self._role_btns.get(role)
         if btn is not None:
             btn.setToolTip(f"Serial: {serial}")
+        self._apply_cross_role_exclusivity()
+
+    # ── Physical camera picker (which serial feeds each role) ────────────
+    def set_available_cameras(self, serials: list[str]) -> None:
+        """Refresh every role's device picker with the currently detected serials."""
+        self._available_serials = list(serials)
+        for pane in self._panes.values():
+            pane.set_available_cameras(self._available_serials)
+        self._apply_cross_role_exclusivity()
+
+    def _apply_cross_role_exclusivity(self) -> None:
+        """Grey out a serial in every pane's picker except the role it's assigned to."""
+        for role, pane in self._panes.items():
+            assigned = pane.assigned_serial()
+            if not assigned:
+                continue
+            for other_role, other_pane in self._panes.items():
+                if other_role != role:
+                    other_pane.disable_serial_in_combo(assigned)
+
+    def _on_pane_camera_selection_changed(self, role_value: str, serial: str) -> None:
+        self._apply_cross_role_exclusivity()
+        self.camera_selection_changed.emit(role_value, serial)
 
     # ── Live state ────────────────────────────────────────────────────────
     def _on_live_clicked(self) -> None:
