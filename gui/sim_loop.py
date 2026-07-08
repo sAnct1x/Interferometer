@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 
+import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from config import PIXEL_SIZE_UM
@@ -27,15 +28,32 @@ _CONTROL_HZ = 30.0
 _RENDER_HZ = 12.0
 _RENDER_SCALE = 0.4  # downscaled frames keep the GUI smooth
 
+# Single source of truth for the two disturbance presets, shared by the
+# ClosedLoopSimulation constructor and the Piezo tile's "Calm bench" /
+# "Realistic" preset buttons (gui/windows/tool_windows.py).
+REALISTIC_DISTURBANCE: dict = {
+    "drift_amp_px": (11.0, 8.0),
+    "drift_period_s": 38.0,
+    "noise_px": 1.2,
+    "creep_frac": 0.03,
+}
+CALM_DISTURBANCE: dict = {
+    "drift_amp_px": (0.0, 0.0),
+    "drift_period_s": 40.0,
+    "noise_px": 1.2,
+    "creep_frac": 0.0,
+}
+
 
 def _realistic_scenario() -> BenchScenario:
     """Bench with bounded thermal sway so the loop must keep correcting."""
-    return BenchScenario(drift_amp_px=(11.0, 8.0), drift_period_s=38.0)
+    d = REALISTIC_DISTURBANCE
+    return BenchScenario(drift_amp_px=d["drift_amp_px"], drift_period_s=d["drift_period_s"])
 
 
 def _realistic_piezo() -> PiezoModelParams:
     """Piezo with hysteresis + slow creep enabled (see PDF creep note)."""
-    return PiezoModelParams(creep_frac=0.03)
+    return PiezoModelParams(creep_frac=REALISTIC_DISTURBANCE["creep_frac"])
 
 
 class ClosedLoopSimulation(QObject):
@@ -89,6 +107,15 @@ class ClosedLoopSimulation(QObject):
     def is_auto(self) -> bool:
         return self._auto
 
+    def far_field_frame_full_res(self) -> np.ndarray:
+        """Render Far Field at full sensor resolution, for analytics (not display).
+
+        The live display frames from ``frames_ready`` are downscaled
+        (``_RENDER_SCALE``) for smooth rendering; beam-fit analytics need the
+        real sensor pixel scale, so this renders on demand at ``scale=1.0``.
+        """
+        return self._bench.render(CameraRole.FAR_FIELD, scale=1.0)
+
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
         """Begin evolving the world and rendering (loop stays manual until armed)."""
@@ -141,6 +168,40 @@ class ClosedLoopSimulation(QObject):
 
     def set_weight(self, weight: float) -> None:
         self._controller.set_weight(weight)
+
+    def set_disturbance_params(
+        self,
+        *,
+        drift_amp_px: tuple[float, float] | None = None,
+        drift_period_s: float | None = None,
+        noise_px: float | None = None,
+        creep_frac: float | None = None,
+    ) -> None:
+        """Live-tune thermal sway / centroid noise / piezo creep.
+
+        Safe to call anytime: the bench model and piezo axes are plain
+        mutable dataclasses, stepped only from this object's own QTimers on
+        the GUI thread, so there is no cross-thread mutation to guard against.
+        """
+        scenario = self._bench.model.scenario
+        if drift_amp_px is not None:
+            scenario.drift_amp_px = (float(drift_amp_px[0]), float(drift_amp_px[1]))
+        if drift_period_s is not None:
+            scenario.drift_period_s = max(float(drift_period_s), 1e-3)
+        if noise_px is not None:
+            scenario.noise_px = max(float(noise_px), 0.0)
+        if creep_frac is not None:
+            self._bench.set_piezo_creep_frac(max(float(creep_frac), 0.0))
+
+    def disturbance_snapshot(self) -> dict:
+        """Current drift/noise/creep settings, for the tuning UI and reports."""
+        scenario = self._bench.model.scenario
+        return {
+            "drift_amp_px": tuple(scenario.drift_amp_px),
+            "drift_period_s": scenario.drift_period_s,
+            "noise_px": scenario.noise_px,
+            "creep_frac": self._bench.piezo_creep_frac,
+        }
 
     def jog(self, axis: int, dv: float) -> None:
         """Nudge one axis by dv volts (manual commissioning)."""

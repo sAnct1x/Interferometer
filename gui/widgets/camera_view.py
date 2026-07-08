@@ -448,13 +448,16 @@ def render_frame_to_viewport(
     *,
     roi: tuple[int, int, int, int] | None = None,
     roi_mode: "RoiMode" = RoiMode.BEAM,
+    tint: str | None = None,
 ) -> None:
     """Scale ``frame`` into ``viewport`` (optionally drawing the ROI box).
 
     Shared by the in-tile panes and the popped-out camera tiles so every
-    surface renders a role identically.
+    surface renders a role identically. ``tint`` colorizes a mono frame
+    (currently only ``"green"``, used for simulated feeds); real hardware
+    frames are never tinted.
     """
-    pix, w, h = _frame_to_pixmap(frame)
+    pix, w, h = _frame_to_pixmap(frame, tint=tint)
     if roi is not None:
         painter = QPainter(pix)
         x, y, rw, rh = roi
@@ -506,6 +509,9 @@ class RoleCameraPane(QWidget):
         self._is_primary = True
         self._assigned_serial: str | None = None
         self._available_serials: list[str] = []
+        # Image is a documented placeholder (optics pending mentor spec); keep its
+        # hint visible even as a thumbnail so it never looks like a live feed.
+        self._always_show_hint = getattr(role, "value", "") == "image"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -546,6 +552,11 @@ class RoleCameraPane(QWidget):
         outer.addWidget(self._hint)
 
         self.viewport = OctagonalViewport()
+        # Opt out of HubTile's minimum-size relaxation (gui/hub_tile.py): without
+        # this, the viewport's own minimum gets stripped while the header row's
+        # whitelisted combo/buttons keep theirs, so as a thumbnail the viewport
+        # loses the fight for space and shows no image at all.
+        self.viewport._preserve_min_size = True
         outer.addWidget(self.viewport, stretch=1)
 
         self._metric_label = QLabel("")
@@ -556,13 +567,18 @@ class RoleCameraPane(QWidget):
     # -- appearance --------------------------------------------------------
     def set_primary(self, is_primary: bool) -> None:
         self._is_primary = is_primary
-        self._hint.setVisible(is_primary and bool(self._hint.text()))
+        show_hint = is_primary or self._always_show_hint
+        self._hint.setVisible(show_hint and bool(self._hint.text()))
         self._metric_label.setVisible(is_primary and bool(self._metric_label.text()))
         self._promote_btn.setVisible(not is_primary and not self._popped)
         if is_primary:
             self.setMaximumHeight(16_777_215)
+            self.viewport.setMinimumSize(160, 120)
         else:
             self.setMaximumHeight(190)
+            # Smaller than the primary minimum, but never zero - a thumbnail
+            # should always show a recognizable (if small) picture.
+            self.viewport.setMinimumSize(96, 70)
 
     def set_popped(self, popped: bool) -> None:
         self._popped = popped
@@ -704,6 +720,14 @@ class CameraView(GlassPanel):
         self._thumb_row = QHBoxLayout(self._thumb_holder)
         self._thumb_row.setContentsMargins(0, 0, 0, 0)
         self._thumb_row.setSpacing(8)
+        # Opt out of HubTile's minimum-size relaxation (gui/hub_tile.py) so the
+        # thumbnail strip can never be squeezed to zero height by the primary
+        # pane's stretch factor.
+        self._thumb_holder._preserve_min_size = True
+        # Header row (~28px) + hint (Image only) + a legible viewport (>=70px)
+        # + layout spacing; 96px was tight enough that the viewport lost out
+        # to the header's whitelisted combo/buttons entirely.
+        self._thumb_holder.setMinimumHeight(px(112, get_scale()))
 
         vp = QVBoxLayout()
         vp.setContentsMargins(0, 0, 0, 0)
@@ -749,9 +773,9 @@ class CameraView(GlassPanel):
         self._live_btn = PentagonButton("Start Live Feed", compact=True)
         self._live_btn.clicked.connect(self._on_live_clicked)
         r1.addWidget(self._live_btn)
-        snap_btn = PentagonButton("Snap Frame", compact=True)
-        snap_btn.clicked.connect(self._snap_frame)
-        r1.addWidget(snap_btn)
+        self._snap_btn = PentagonButton("Snap Frame", compact=True)
+        self._snap_btn.clicked.connect(self._snap_frame)
+        r1.addWidget(self._snap_btn)
         return r1
 
     def _build_settings_row(self):
@@ -1016,6 +1040,11 @@ class CameraView(GlassPanel):
         self._simulation_feed = simulation and active
         self._live_btn.setText("Stop Live Feed" if active else "Start Live Feed")
 
+    def set_snap_busy(self, busy: bool) -> None:
+        """Disable and relabel Snap Frame while a single-frame grab is in flight."""
+        self._snap_btn.setEnabled(not busy)
+        self._snap_btn.setText("Capturing…" if busy else "Snap Frame")
+
     def show_idle(self) -> None:
         for role in self._roles:
             self._frames[role] = None
@@ -1091,7 +1120,8 @@ class CameraView(GlassPanel):
             return
         far = self._CameraRole.coerce("far_field")
         roi = self._rois.get(role) if role == far else None
-        render_frame_to_viewport(pane.viewport, frame, roi=roi, roi_mode=self._mode)
+        tint = "green" if self._simulation_feed else None
+        render_frame_to_viewport(pane.viewport, frame, roi=roi, roi_mode=self._mode, tint=tint)
 
     def set_coupling_overlay(self, overlay: dict | None, role=None) -> None:
         role = self._CameraRole.coerce("far_field") if role is None else self._CameraRole.coerce(role)
@@ -1216,13 +1246,32 @@ def _normalize_u8(gray: np.ndarray) -> np.ndarray:
     return (255 * arr).astype(np.uint8)
 
 
-def _frame_to_pixmap(frame: np.ndarray) -> tuple[QPixmap, int, int]:
+def _mono_to_green_rgb(gray_u8: np.ndarray) -> np.ndarray:
+    """Colorize a normalized mono frame as a green (520 nm) beam.
+
+    Real cameras here are Bayer color; simulated frames are plain mono, which
+    used to render as flat white-on-black. This maps low intensity to near
+    black, mid intensity to saturated green, and only the hottest core toward
+    white - closer to how a green laser spot actually looks on a sensor.
+    """
+    g = gray_u8.astype(np.float32) / 255.0
+    core = np.clip(g * 1.35 - 0.55, 0.0, 1.0) ** 1.5  # only the brightest core blooms white
+    r = core * 255.0
+    gg = np.clip(g * 1.15, 0.0, 1.0) * 255.0
+    b = core * 230.0
+    rgb = np.stack([r, gg, b], axis=-1).astype(np.uint8)
+    return np.ascontiguousarray(rgb)
+
+
+def _frame_to_pixmap(frame: np.ndarray, *, tint: str | None = None) -> tuple[QPixmap, int, int]:
     """Build a display pixmap from a mono or color frame; returns (pixmap, w, h).
 
     Color frames are shown in true RGB. A single brightness gain (shared across all
     three channels) maps the frame into 8-bit display range without altering hue, so
     dim beams stay visible and high-bit-depth data is scaled down faithfully.
     Uses float32 (not float64) to halve allocation cost on megapixel frames.
+    Mono frames take an optional ``tint`` (see ``_mono_to_green_rgb``); real
+    color frames ignore it since they already carry true sensor color.
     """
     arr = np.asarray(frame)
     if arr.ndim == 3 and arr.shape[2] >= 3:
@@ -1249,5 +1298,9 @@ def _frame_to_pixmap(frame: np.ndarray) -> tuple[QPixmap, int, int]:
 
     disp = _normalize_u8(to_grayscale(arr))
     h, w = disp.shape
+    if tint == "green":
+        rgb = _mono_to_green_rgb(disp)
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg.copy()), w, h
     qimg = QImage(disp.data, w, h, w, QImage.Format.Format_Grayscale8)
     return QPixmap.fromImage(qimg.copy()), w, h

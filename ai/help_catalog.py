@@ -38,6 +38,14 @@ HELP_SECTIONS: tuple[tuple[str, tuple[HelpEntry, ...]], ...] = (
                 "Show active λ, diode label, and last measured value.",
                 ("what is the wavelength", "report wavelength"),
             ),
+            HelpEntry(
+                "results_statement",
+                "Full results statement",
+                "Summarize everything observable right now: coupling, beam waist, "
+                "wavelength trends, and (if Simulation #2 is running) piezo error, "
+                "voltages, and drift settings.",
+                ("results statement", "give me a report", "full report"),
+            ),
         ),
     ),
     (

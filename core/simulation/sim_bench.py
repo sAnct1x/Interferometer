@@ -39,6 +39,15 @@ class SimBench:
         self.model.reset()
         self._t = 0.0
 
+    def set_piezo_creep_frac(self, value: float) -> None:
+        """Live-tune the log-creep amplitude shared by both simulated axes."""
+        for axis in self._axes:
+            axis.params.creep_frac = value
+
+    @property
+    def piezo_creep_frac(self) -> float:
+        return self._axes[0].params.creep_frac if self._axes else 0.0
+
     def step(self, dt: float) -> None:
         """Advance the piezo response and the clock by ``dt`` seconds."""
         for axis in self._axes:

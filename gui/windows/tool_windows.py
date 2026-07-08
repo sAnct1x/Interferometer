@@ -66,6 +66,7 @@ class PiezoControlPanel(GlassPanel):
         self._v0: deque[float] = deque(maxlen=600)
         self._v1: deque[float] = deque(maxlen=600)
         self._plot_decim = 0
+        self._block_disturbance_signals = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(*self.content_margins())
@@ -82,6 +83,7 @@ class PiezoControlPanel(GlassPanel):
         root.addLayout(self._build_connection_row())
         root.addLayout(self._build_mode_gain_grid())
         root.addLayout(self._build_jog_row())
+        root.addLayout(self._build_disturbance_row())
         root.addWidget(self._build_plots(), stretch=1)
 
         self._status = QLabel("Idle: press Connect, then Arm loop.")
@@ -91,6 +93,7 @@ class PiezoControlPanel(GlassPanel):
         self._sim.control_tick.connect(self._on_tick)
         self._sim.status_changed.connect(self._status.setText)
         self._push_gains()
+        self._sync_disturbance_ui()
 
     # -- UI construction ----------------------------------------------------
     def _build_connection_row(self) -> QHBoxLayout:
@@ -182,6 +185,66 @@ class PiezoControlPanel(GlassPanel):
         row.addStretch()
         return row
 
+    def _build_disturbance_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        lbl = QLabel("Disturbance:")
+        lbl.setStyleSheet(muted_style())
+        row.addWidget(lbl)
+
+        self._drift_amp_spins: list[QDoubleSpinBox] = []
+        for axis_lbl in ("X", "Y"):
+            a_lbl = QLabel(f"amp {axis_lbl}")
+            a_lbl.setStyleSheet(muted_style())
+            row.addWidget(a_lbl)
+            sp = QDoubleSpinBox()
+            sp.setStyleSheet(_CTRL_FIELD_STYLE)
+            sp.setRange(0.0, 60.0)
+            sp.setDecimals(1)
+            sp.setSingleStep(1.0)
+            sp.setSuffix(" px")
+            sp.setFixedWidth(72)
+            sp.valueChanged.connect(self._push_disturbance)
+            row.addWidget(sp)
+            self._drift_amp_spins.append(sp)
+
+        period_lbl = QLabel("period")
+        period_lbl.setStyleSheet(muted_style())
+        row.addWidget(period_lbl)
+        self._drift_period_spin = QDoubleSpinBox()
+        self._drift_period_spin.setStyleSheet(_CTRL_FIELD_STYLE)
+        self._drift_period_spin.setRange(2.0, 300.0)
+        self._drift_period_spin.setDecimals(0)
+        self._drift_period_spin.setSingleStep(1.0)
+        self._drift_period_spin.setSuffix(" s")
+        self._drift_period_spin.setFixedWidth(72)
+        self._drift_period_spin.valueChanged.connect(self._push_disturbance)
+        row.addWidget(self._drift_period_spin)
+
+        noise_lbl = QLabel("noise")
+        noise_lbl.setStyleSheet(muted_style())
+        row.addWidget(noise_lbl)
+        self._noise_spin = QDoubleSpinBox()
+        self._noise_spin.setStyleSheet(_CTRL_FIELD_STYLE)
+        self._noise_spin.setRange(0.0, 10.0)
+        self._noise_spin.setDecimals(2)
+        self._noise_spin.setSingleStep(0.1)
+        self._noise_spin.setSuffix(" px")
+        self._noise_spin.setFixedWidth(72)
+        self._noise_spin.valueChanged.connect(self._push_disturbance)
+        row.addWidget(self._noise_spin)
+
+        self._calm_btn = PentagonButton("Calm bench", compact=True)
+        self._calm_btn.setToolTip("Zero out thermal sway (keeps a little centroid noise)")
+        self._calm_btn.clicked.connect(lambda: self._apply_disturbance_preset(calm=True))
+        row.addWidget(self._calm_btn)
+        self._realistic_btn = PentagonButton("Realistic", compact=True)
+        self._realistic_btn.setToolTip("Restore the default thermal sway + piezo creep")
+        self._realistic_btn.clicked.connect(lambda: self._apply_disturbance_preset(calm=False))
+        row.addWidget(self._realistic_btn)
+        row.addStretch()
+        return row
+
     def _build_plots(self) -> QWidget:
         wrap = QWidget()
         lay = QVBoxLayout(wrap)
@@ -238,6 +301,35 @@ class PiezoControlPanel(GlassPanel):
                 kd=self._gain_spins["Kd"].value(),
             )
         )
+
+    def _push_disturbance(self, *_args) -> None:
+        if self._block_disturbance_signals:
+            return
+        self._sim.set_disturbance_params(
+            drift_amp_px=(self._drift_amp_spins[0].value(), self._drift_amp_spins[1].value()),
+            drift_period_s=self._drift_period_spin.value(),
+            noise_px=self._noise_spin.value(),
+        )
+
+    def _apply_disturbance_preset(self, *, calm: bool) -> None:
+        from gui.sim_loop import CALM_DISTURBANCE, REALISTIC_DISTURBANCE
+
+        preset = CALM_DISTURBANCE if calm else REALISTIC_DISTURBANCE
+        self._sim.set_disturbance_params(**preset)
+        self._sync_disturbance_ui()
+
+    def _sync_disturbance_ui(self) -> None:
+        """Reflect the loop's current disturbance settings in the spinboxes."""
+        snap = self._sim.disturbance_snapshot()
+        self._block_disturbance_signals = True
+        try:
+            ax, ay = snap["drift_amp_px"]
+            self._drift_amp_spins[0].setValue(ax)
+            self._drift_amp_spins[1].setValue(ay)
+            self._drift_period_spin.setValue(snap["drift_period_s"])
+            self._noise_spin.setValue(snap["noise_px"])
+        finally:
+            self._block_disturbance_signals = False
 
     def _on_tick(self, rec: dict) -> None:
         v = rec["voltages"]

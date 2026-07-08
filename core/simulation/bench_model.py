@@ -95,17 +95,31 @@ class BenchModel:
         # 1/e^2 diameter = 4 sigma for intensity exp(-r^2/2sigma^2).
         return (self.scenario.waist_um / self.pixel_um) / 4.0
 
-    def _offset_px(self, tilt_urad: tuple[float, float], t: float) -> tuple[float, float]:
-        """Residual beam offset at the fiber after tilt cancels base misalignment."""
+    def _offset_px(
+        self,
+        tilt_urad: tuple[float, float],
+        t: float,
+        *,
+        tilt_gain: float = _PX_PER_URAD,
+    ) -> tuple[float, float]:
+        """Beam offset after tilt cancels the base misalignment.
+
+        Defaults to the fiber's full tilt sensitivity (the truth signal the
+        PID/coupling model reacts to). Camera renders pass their own
+        ``tilt_gain`` so a ghost path with reduced sensitivity (e.g. Image at
+        0.15x) shows a correspondingly damped version of the same thermal
+        drift the fiber sees, instead of dropping it entirely.
+        """
         s = self.scenario
+        drift_ratio = tilt_gain / _PX_PER_URAD
         bx, by = s.base_offset_px
         dxr, dyr = s.drift_px_per_s
         ax, ay = s.drift_amp_px
         w = 2.0 * np.pi / max(s.drift_period_s, 1e-3)
         sway_x = ax * np.sin(w * t)
         sway_y = ay * np.sin(0.83 * w * t)  # incommensurate so it never fully repeats
-        ox = bx + dxr * t + sway_x + _PX_PER_URAD * tilt_urad[0]
-        oy = by + dyr * t + sway_y + _PX_PER_URAD * tilt_urad[1]
+        ox = bx + drift_ratio * (dxr * t + sway_x) + tilt_gain * tilt_urad[0]
+        oy = by + drift_ratio * (dyr * t + sway_y) + tilt_gain * tilt_urad[1]
         return ox, oy
 
     def coupling_fraction(self, tilt_urad: tuple[float, float], t: float = 0.0) -> float:
@@ -132,8 +146,12 @@ class BenchModel:
             amp = self.scenario.peak_counts * max(frac, 0.0)
             return BeamSpot((geo.center_px[0] + nx, geo.center_px[1] + ny), sig * 1.1, amp)
 
-        cx = geo.center_px[0] + geo.tilt_gain * tilt_urad[0] + self.scenario.base_offset_px[0] + nx
-        cy = geo.center_px[1] + geo.tilt_gain * tilt_urad[1] + self.scenario.base_offset_px[1] + ny
+        # Same offset formula the truth/coupling model uses, at this role's own
+        # tilt sensitivity, so what the camera shows visibly sways with thermal
+        # drift instead of only reacting to piezo tilt.
+        ox, oy = self._offset_px(tilt_urad, t, tilt_gain=geo.tilt_gain)
+        cx = geo.center_px[0] + ox + nx
+        cy = geo.center_px[1] + oy + ny
         amp = self.scenario.peak_counts
         if role is CameraRole.IMAGE:
             amp *= 0.6  # dimmer ghost; slightly defocused

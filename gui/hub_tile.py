@@ -283,6 +283,8 @@ class HubTile(QWidget):
                 continue
             if getattr(child, "_chat_message", False) or getattr(child, "_chat_scroll", False):
                 continue
+            if getattr(child, "_preserve_min_size", False):
+                continue
             if isinstance(
                 child,
                 (

@@ -35,13 +35,14 @@ from core.motion_control import MotionController
 from core.scan_worker import WavelengthScanWorker
 from core.system_stats import SystemStats, SystemStatsWorker
 from ai.intents import DEFAULT_SIMULATION_DURATION_SEC, Intent
-from ai.simulation_report import format_simulation_report
+from ai.simulation_report import format_results_statement, format_simulation_report
 from gui.holo_background import HoloBackground
 from gui.hub_chrome import HubChromeBar
 from gui.neon_theme import CHROME_TELEMETRY_GAP_PX
 from gui.hub_tile import HubTile, NON_SNAPPING_TILES
 from gui.tile_layout import TileLayoutController
 from gui.minimized_tile_bar import MinimizedTileBar
+from gui.widgets.toast import ToastOverlay
 from gui.wireframe_rail import HexRailOverlay
 from gui.widgets.ai_terminal import AtriaPanel
 from gui.widgets.beam_plots import BeamPlotsPanel
@@ -207,12 +208,14 @@ class Dashboard(QMainWindow):
         self._min_tile_bar.restore_requested.connect(self.restore_tile_from_bar)
         self._min_tile_bar.close_requested.connect(self._close_tile_from_bar)
         self._min_tile_bar.hide()
+        self._toast = ToastOverlay(self)
 
         # Simulation #2 flags must exist before tiles register: _register_tiles
         # triggers visibility callbacks that read _sim2_camera_mode via
         # _update_sim2_running().
         self._sim2_camera_mode = False
         self._sim2_running = False
+        self._roi_snapshot_was_open_before_sim2 = False
 
         self._register_tiles()
         self._validate_menu_wiring()
@@ -255,6 +258,7 @@ class Dashboard(QMainWindow):
         self._sim_display_last_t: float = 0.0
         self._live_display_last_t: float = 0.0
         self._live_analytics_last_t: float = 0.0
+        self._sim2_analytics_last_t: float = 0.0
         self._last_frame_processed_t: float = 0.0
         self._defer_screen_refit_until: float = 0.0
         self._last_applied_scale: float = boot_scale
@@ -1280,6 +1284,12 @@ class Dashboard(QMainWindow):
         if hasattr(self._piezo_panel, "sync_buttons"):
             self._piezo_panel.sync_buttons()
         self._update_sim2_running()
+        # Piezo's default home overlaps ROI Snapshot's; Sim #2 doesn't feed ROI
+        # Snapshot anyway, so tuck it away instead of letting Piezo land on top
+        # of it. Only ever auto-hides here, and only un-hides what we hid.
+        self._roi_snapshot_was_open_before_sim2 = self._is_tile_open("roi_snapshot")
+        if self._roi_snapshot_was_open_before_sim2:
+            self.hide_tile("roi_snapshot")
         for tile_id in ("camera", "piezo", "efficiency"):
             self.show_tile(tile_id)
         self._log_action("Simulation #2 (piezo closed loop) started")
@@ -1288,11 +1298,17 @@ class Dashboard(QMainWindow):
     def _stop_simulation_two(self) -> None:
         if not self._sim2_camera_mode:
             return
+        # Gather the results statement while _sim2_camera_mode is still true
+        # (so it reports "Simulation #2" instead of falling back to idle/live).
+        self._build_and_post_results_statement()
         self._sim2_camera_mode = False
         self._sim2.set_auto(False)
         if hasattr(self._piezo_panel, "sync_buttons"):
             self._piezo_panel.sync_buttons()
         self._update_sim2_running()
+        if getattr(self, "_roi_snapshot_was_open_before_sim2", False):
+            self.show_tile("roi_snapshot")
+        self._roi_snapshot_was_open_before_sim2 = False
         self._camera_panel.set_live_active(False)
         self._camera_panel.show_idle()
         self._camera_panel.set_coupling_overlay(None)
@@ -1308,6 +1324,39 @@ class Dashboard(QMainWindow):
             overlay = payload.get("overlay")
             if overlay is not None:
                 self._camera_panel.set_coupling_overlay(overlay, role)
+        now = time.time()
+        if now - self._sim2_analytics_last_t >= 0.6:
+            self._sim2_analytics_last_t = now
+            self._process_sim2_analytics()
+
+    def _process_sim2_analytics(self) -> None:
+        """Feed the 3D Beam Profile panel from Simulation #2's Far Field frame.
+
+        Display frames from ``frames_ready`` are downscaled for smooth
+        rendering, so beam-fit analytics render a fresh full-resolution frame
+        instead (also cached into ``_last_frame`` so a manual "Analyze Beam"
+        click works during Simulation #2 too).
+        """
+        frame = self._sim2.far_field_frame_full_res()
+        self._last_frame[CameraRole.FAR_FIELD] = frame
+        if not self._is_tile_open("beam"):
+            return
+        roi = self._cfg.beam_roi
+        crop = crop_box_from_xywh(roi)
+        result = analyze_frame(frame, crop_box=crop)
+        w0 = result.get("one_over_e2_avg_um", float("nan"))
+        quality = analyze_beam_quality(
+            result["x_profile"],
+            result["y_profile"],
+            measured_w0_um=w0,
+        )
+        result["beam_quality"] = quality
+        result["m2"] = quality["m2"]
+        self._beam_panel.update_analysis(result, live=True, update_surface=True)
+        if self._is_tile_open("trends"):
+            self._trend_panel.append_sample(w0_um=w0)
+        if w0 == w0:
+            self._update_telemetry(beam_waist_um=w0)
 
     def _on_sim2_tick(self, rec: dict) -> None:
         if not self._sim2_camera_mode:
@@ -1635,6 +1684,42 @@ class Dashboard(QMainWindow):
         self.show_tile("atria")
         self._ai_panel.post_bench_message(report)
 
+    def _current_mode_label(self) -> str:
+        """Which of the four bench states is active right now, for reporting."""
+        if self._simulation_active:
+            return "sim1"
+        if self._sim2_camera_mode:
+            return "sim2"
+        if self._camera_live:
+            return "live"
+        return "idle"
+
+    def _build_and_post_results_statement(self) -> None:
+        """Post a full "what's happening right now" summary to Atria.
+
+        Works on demand (results_statement intent) or auto-posted when
+        Simulation #2 stops; gathers telemetry, the session trend summary,
+        the latest coupling overlay, and (when Simulation #2 has run at all)
+        its control history and current drift/noise settings.
+        """
+        sim2_history = None
+        sim2_disturbance = None
+        if self._sim2_camera_mode or self._sim2_running:
+            sim2_history = list(self._sim2.controller.history)
+            sim2_disturbance = self._sim2.disturbance_snapshot()
+        report = format_results_statement(
+            mode=self._current_mode_label(),
+            telemetry=dict(self._telemetry),
+            trend_summary=self._trend_panel.summary(),
+            coupling_overlay=self._last_sim_overlay or self._last_live_overlay,
+            fft_peak_hz=self._simulation_fft_peak_hz,
+            fft_rate_hz=self._simulation_fft_rate_hz,
+            sim2_history=sim2_history,
+            sim2_disturbance=sim2_disturbance,
+        )
+        self.show_tile("atria")
+        self._ai_panel.post_bench_message(report)
+
     def _on_simulation_error(self, message: str) -> None:
         self._stop_simulation()
         self._show_error(message)
@@ -1792,6 +1877,7 @@ class Dashboard(QMainWindow):
         self._scan_worker.finished_ok.connect(self._on_wavelength_scan_done)
         self._scan_worker.error.connect(self._show_error)
         self._scan_worker.finished.connect(self._after_wavelength_scan)
+        self._roi_snapshot_panel.set_scan_busy(True)
         self._scan_worker.start()
 
     def _apply_scan_result(self, result: dict, *, show_dialog: bool = True) -> None:
@@ -1826,6 +1912,7 @@ class Dashboard(QMainWindow):
 
     def _after_wavelength_scan(self) -> None:
         self._scan_worker = None
+        self._roi_snapshot_panel.set_scan_busy(False)
         if self._resume_live_after_scan:
             self._resume_live_after_scan = False
             self._camera_panel.set_live_active(True)
@@ -1883,6 +1970,7 @@ class Dashboard(QMainWindow):
 
     def _log_action(self, message: str) -> None:
         self._tasks_panel.log_event(message)
+        self._toast.show_message(message)
 
     def _toggle_live_feed(self, active: bool) -> None:
         if self._simulation_active:
@@ -1907,6 +1995,7 @@ class Dashboard(QMainWindow):
         if self._snap_worker is not None and self._snap_worker.isRunning():
             return
         self._update_telemetry(status="Capturing single frame…")
+        self._camera_panel.set_snap_busy(True)
         self._snap_worker = SnapWorker(self._cfg.camera_serial, self)
         self._snap_worker.frame_ready.connect(self._on_single_snap_ready)
         self._snap_worker.error.connect(self._show_error)
@@ -1916,6 +2005,7 @@ class Dashboard(QMainWindow):
 
     def _clear_snap_worker(self) -> None:
         self._snap_worker = None
+        self._camera_panel.set_snap_busy(False)
 
     def _on_single_snap_ready(self, frame: np.ndarray) -> None:
         self._log_action("Single frame captured from Thorcam")
@@ -2147,6 +2237,8 @@ class Dashboard(QMainWindow):
         elif name == "stop_simulation":
             self._stop_simulation()
             self._log_action("Atria: stop simulation")
+        elif name == "results_statement":
+            self._build_and_post_results_statement()
         elif name in ("jog_stage", "go_safe_home", "mark_safe_home") and not hardware_allowed:
             self._show_error("Enable hardware control to move the stage.")
 
@@ -2199,6 +2291,7 @@ class Dashboard(QMainWindow):
 
     def _show_error(self, message: str) -> None:
         self._update_telemetry(status=f"Error: {message[:60]}")
+        self._toast.show_message(message, kind="error")
         QMessageBox.warning(self, APP_TITLE, message)
 
     # --- Window lifecycle ---
@@ -2239,6 +2332,19 @@ class Dashboard(QMainWindow):
             self._sync_layout_after_resize()
         self._position_hex_rail()
         self._position_min_tile_bar()
+        self._position_toast_overlay()
+
+    def _position_toast_overlay(self) -> None:
+        width = 340
+        bottom_margin = MinimizedTileBar.BAR_HEIGHT + 16
+        top = self.chrome_height() + 8
+        self._toast.setGeometry(
+            max(0, self.width() - width - 16),
+            top,
+            width,
+            max(0, self.height() - top - bottom_margin),
+        )
+        self._toast.raise_()
 
     def _position_min_tile_bar(self) -> None:
         from gui.ui_scale import rail_width
@@ -2266,6 +2372,7 @@ class Dashboard(QMainWindow):
         )
         self._hex_rail.raise_()
         self._position_min_tile_bar()
+        self._position_toast_overlay()
 
     def _apply_default_visibility(self) -> None:
         for tile_id in DEFAULT_HIDDEN:

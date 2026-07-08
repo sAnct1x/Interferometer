@@ -79,6 +79,14 @@ def parse_intent(text: str) -> Intent | None:
             params["duration_sec"] = dur
         return Intent("run_simulation", params, text)
 
+    # --- Full results statement (before the narrower single-metric reports) ---
+    if re.search(
+        r"\b(results? statement|full report|status report|give me a (report|summary)|"
+        r"summarize (the )?(results|simulation|everything|bench))\b",
+        t,
+    ):
+        return Intent("results_statement", {}, text)
+
     if re.search(r"\b(beam waist|beam size|spot size|1/e|tell me the beam)\b", t):
         return Intent("report_beam_waist", {}, text)
 

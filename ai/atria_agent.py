@@ -346,4 +346,7 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
     if intent.name == "stop_simulation":
         return "Stopping bench simulation."
 
+    if intent.name == "results_statement":
+        return "One moment, pulling together the current results…"
+
     return intent.raw

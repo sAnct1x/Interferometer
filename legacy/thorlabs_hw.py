@@ -1,4 +1,4 @@
-"""Thorcam + K-Cube connect helpers — no matplotlib / poster plot dependencies."""
+"""Thorcam + K-Cube connect helpers, no matplotlib / poster plot dependencies."""
 
 from __future__ import annotations
 

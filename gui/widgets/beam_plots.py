@@ -137,7 +137,9 @@ class BeamPlotsPanel(GlassPanel):
         self._surface3d = None
         self._gl_error = None
 
-    def update_analysis(self, result: dict, *, live: bool = False) -> None:
+    def update_analysis(
+        self, result: dict, *, live: bool = False, update_surface: bool = False
+    ) -> None:
         w = result.get("one_over_e2_avg_um", float("nan"))
         fx = result.get("fwhm_x_um", float("nan"))
         fy = result.get("fwhm_y_um", float("nan"))
@@ -183,6 +185,8 @@ class BeamPlotsPanel(GlassPanel):
                 if now - self._live_heatmap_last_t >= 1.0:
                     self._live_heatmap_last_t = now
                     self._update_heatmap(img_bs)
+                    if update_surface:
+                        self._update_surface(img_bs)
             else:
                 self._update_heatmap(img_bs)
                 self._update_surface(img_bs)

@@ -70,8 +70,8 @@ tile to snap it back):
 Alignment uses two simulated **PK2JA2P1** piezo stacks (tip/tilt) on a Newport
 **U100-A** mount at Mirror 5, driven by a **PID** loop on centroid error (not
 open-loop hill climbing). Constants live in `config.py`; see
-`docs/BENCH_CONSTANTS.md`. No piezo/camera hardware exists yet, everything runs
-in simulation behind the `PiezoDriver` / `CameraSource` interfaces.
+`docs/BENCH_CONSTANTS.md`. No piezo hardware exists yet, everything runs in
+simulation behind the `PiezoDriver` interface (`core/hardware/piezo_driver.py`).
 
 ## Simulation #1 vs Simulation #2
 

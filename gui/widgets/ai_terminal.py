@@ -175,6 +175,7 @@ class AtriaPanel(GlassPanel):
         self._worker.reply_ready.connect(self._on_atria_reply)
         self._worker.error.connect(lambda e: self._append_atria(f"Error: {e}"))
         self._worker.intent_ready.connect(self._handle_intent)
+        self._worker.finished.connect(self._on_atria_worker_finished)
 
         layout = QVBoxLayout(self)
         inset = self.content_margins()
@@ -264,6 +265,8 @@ class AtriaPanel(GlassPanel):
         self._telemetry = dict(data)
 
     def _send(self) -> None:
+        if self._worker.isRunning():
+            return
         text = self._input.toPlainText().strip()
         if not text:
             return
@@ -288,6 +291,8 @@ class AtriaPanel(GlassPanel):
 
         prior_history = self._chat_history[:-1]
         use_gemini = bool(GEMINI_API_KEY)
+        self._send_btn.setEnabled(False)
+        self._send_btn.setText("…")
         self._worker.ask(
             text,
             prior_history,
@@ -295,6 +300,10 @@ class AtriaPanel(GlassPanel):
             self._hw_perm.isChecked(),
             local_fallback=not use_gemini,
         )
+
+    def _on_atria_worker_finished(self) -> None:
+        self._send_btn.setEnabled(True)
+        self._send_btn.setText("Send")
 
     def _handle_intent(self, intent: Intent) -> None:
         reply = format_intent_reply(intent, self._telemetry)

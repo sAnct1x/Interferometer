@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget, QSizePo
 
 from config import OCTAGON_CHAMFER_PX, PANEL_CORNER_RADIUS_PX
 from gui.hex_geometry import tile_panel_path
-from gui.typography import panel_title_stylesheet, body_pt, TEXT_PRIMARY
+from gui.typography import panel_title_stylesheet, body_pt, TEXT_PRIMARY, TEXT_MUTED
 from gui.neon_theme import (
     COLOR_CYAN,
     COLOR_MAGENTA,
@@ -254,6 +254,12 @@ class BracketButton(QPushButton):
         self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self._apply_sizing()
 
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor
+        )
+
     def _button_font(self) -> QFont:
         font = self.font()
         font.setPointSizeF(body_pt())
@@ -289,13 +295,18 @@ class BracketButton(QPushButton):
         fill_path = QPainterPath()
         fill_path.addRoundedRect(rect, radius, radius)
 
-        hover = self.underMouse() and self.isEnabled()
+        enabled = self.isEnabled()
+        hover = self.underMouse() and enabled
         pressed = self.isDown()
         bracket_len = px(14, scale)
         label = self.text()
 
         base = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        if pressed:
+        if not enabled:
+            base.setColorAt(0.0, QColor(30, 26, 40, 120))
+            base.setColorAt(0.55, QColor(22, 20, 30, 124))
+            base.setColorAt(1.0, QColor(14, 12, 20, 128))
+        elif pressed:
             base.setColorAt(0.0, QColor(38, 12, 68, 195))
             base.setColorAt(0.55, QColor(24, 10, 48, 200))
             base.setColorAt(1.0, QColor(14, 6, 32, 205))
@@ -309,10 +320,11 @@ class BracketButton(QPushButton):
             base.setColorAt(1.0, QColor(16, 8, 36, 188))
         painter.fillPath(fill_path, base)
 
-        sheen = QLinearGradient(rect.topRight(), rect.center())
-        sheen.setColorAt(0.0, QColor(168, 85, 247, 36 if hover else 26))
-        sheen.setColorAt(1.0, QColor(168, 85, 247, 0))
-        painter.fillPath(fill_path, sheen)
+        if enabled:
+            sheen = QLinearGradient(rect.topRight(), rect.center())
+            sheen.setColorAt(0.0, QColor(168, 85, 247, 36 if hover else 26))
+            sheen.setColorAt(1.0, QColor(168, 85, 247, 0))
+            painter.fillPath(fill_path, sheen)
 
         inner_r = rect.adjusted(3.5, 3.5, -3.5, -3.5)
         inner_rad = max(5.0, radius - 2.5)
@@ -324,21 +336,25 @@ class BracketButton(QPushButton):
 
         outline = QPainterPath()
         outline.addRoundedRect(rect.adjusted(1.0, 1.0, -1.0, -1.0), radius - 1, radius - 1)
-        ring_pen = QPen(QColor(COLOR_PURPLE.red(), COLOR_PURPLE.green(), COLOR_PURPLE.blue(), 200), 1.2)
+        ring_alpha = 70 if not enabled else 200
+        ring_pen = QPen(
+            QColor(COLOR_PURPLE.red(), COLOR_PURPLE.green(), COLOR_PURPLE.blue(), ring_alpha), 1.2
+        )
         ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(ring_pen)
         painter.drawPath(outline)
 
-        tl_x = rect.left() + 5
-        tl_y = rect.top() + 5
-        br_x = rect.right() - 5
-        br_y = rect.bottom() - 5
-        _draw_l_bracket(painter, tl_x, tl_y, bracket_len, flip_x=False, flip_y=False, hover=hover)
-        _draw_l_bracket(painter, br_x, br_y, bracket_len, flip_x=True, flip_y=True, hover=hover)
-        _draw_corner_dots(painter, inner_r, "tl")
-        _draw_corner_dots(painter, inner_r, "br")
+        if enabled:
+            tl_x = rect.left() + 5
+            tl_y = rect.top() + 5
+            br_x = rect.right() - 5
+            br_y = rect.bottom() - 5
+            _draw_l_bracket(painter, tl_x, tl_y, bracket_len, flip_x=False, flip_y=False, hover=hover)
+            _draw_l_bracket(painter, br_x, br_y, bracket_len, flip_x=True, flip_y=True, hover=hover)
+            _draw_corner_dots(painter, inner_r, "tl")
+            _draw_corner_dots(painter, inner_r, "br")
 
-        painter.setPen(QColor(TEXT_PRIMARY))
+        painter.setPen(QColor(TEXT_PRIMARY) if enabled else QColor(TEXT_MUTED))
         font = self._button_font()
         painter.setFont(font)
         inset_x = px(

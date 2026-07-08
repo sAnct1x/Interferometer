@@ -33,12 +33,16 @@ class RoiSnapshotPanel(GlassPanel):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        save_btn = PentagonButton("Save ROI", compact=True)
+        save_btn = PentagonButton("Save ROI Box", compact=True)
+        save_btn.setToolTip(
+            "Saves this ROI box's position and size to config.\n"
+            "To capture an image, use Snap Frame in the Live Camera tile."
+        )
         save_btn.clicked.connect(self.capture_requested.emit)
         actions.addWidget(save_btn)
-        scan_btn = PentagonButton("Scan wavelength", compact=True)
-        scan_btn.clicked.connect(self.wavelength_scan_requested.emit)
-        actions.addWidget(scan_btn)
+        self._scan_btn = PentagonButton("Scan wavelength", compact=True)
+        self._scan_btn.clicked.connect(self.wavelength_scan_requested.emit)
+        actions.addWidget(self._scan_btn)
         analyze_btn = PentagonButton("Analyze Beam", compact=True)
         analyze_btn.clicked.connect(self.analyze_requested.emit)
         actions.addWidget(analyze_btn)
@@ -47,6 +51,11 @@ class RoiSnapshotPanel(GlassPanel):
 
     def has_snapshot(self) -> bool:
         return self._snapshot is not None
+
+    def set_scan_busy(self, busy: bool) -> None:
+        """Disable and relabel Scan wavelength while a stage scan is in flight."""
+        self._scan_btn.setEnabled(not busy)
+        self._scan_btn.setText("Scanning…" if busy else "Scan wavelength")
 
     def set_roi(self, roi: tuple[int, int, int, int], mode: RoiMode | None = None) -> None:
         self._roi = roi

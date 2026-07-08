@@ -160,7 +160,7 @@ def measurement_warnings(
 
     if min(h, w) < 80:
         warnings.append(
-            f"ROI crop is only {w}x{h} px — include more dark background around the beam for accurate widths."
+            f"ROI crop is only {w}x{h} px, include more dark background around the beam for accurate widths."
         )
 
     if raw_peak > 0 and background_level / raw_peak > 0.25:
@@ -221,7 +221,7 @@ def _append_roi_limit_warnings(
         if y_msg is not None:
             warnings.append(y_msg)
         warnings.append(
-            f"Large X/Y mismatch ({axis_delta:.0f} um) — recenter ROI or shrink one axis."
+            f"Large X/Y mismatch ({axis_delta:.0f} um), recenter ROI or shrink one axis."
         )
 
 
