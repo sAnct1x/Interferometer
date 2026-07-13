@@ -68,11 +68,11 @@ def list_cameras() -> list[str]:
     return _normalize_serial_list(raw)
 
 
-def connect_camera(serial: str | None = None, *, retries: int = 4) -> Any | None:
+def connect_camera(serial: str | None = None, *, retries: int = 2) -> Any | None:
     """Open a Thorcam by serial, retrying under the SDK lock.
 
-    Concurrent opens from three live-feed workers are the usual reason one
-    camera (often Image / 38173) fails while the others succeed.
+    Keep retries low — a hung/poisoned SDK open will otherwise block the live
+    worker for many seconds while the UI sits on ``Connecting…``.
     """
     _ensure_legacy_path()
     from pylablib.devices import Thorlabs
@@ -102,7 +102,7 @@ def connect_camera(serial: str | None = None, *, retries: int = 4) -> Any | None
         except Exception as exc:
             last_err = exc
             # Unlock between attempts so sibling role workers can finish opening.
-            time.sleep(0.45 * (attempt + 1))
+            time.sleep(0.35 * (attempt + 1))
     if last_err is not None:
         raise RuntimeError(
             f"Could not open Thorcam {want or '(auto)'}: {last_err}"

@@ -1,4 +1,4 @@
-"""Single-frame Thorcam capture for ROI Snapshot and offline analysis."""
+"""Single-frame Thorcam capture for ROI Snapshot and frozen thumbnails."""
 
 from __future__ import annotations
 
@@ -16,6 +16,10 @@ from core.hardware_bridge import (
     wait_for_frame,
 )
 
+# Thumb nails must fail fast so a dark/blocked camera cannot stall live start.
+DEFAULT_SNAP_TIMEOUT_S = 15.0
+THUMB_SNAP_TIMEOUT_S = 3.0
+
 
 class SnapWorker(QThread):
     """Grab one TLCam frame in a background thread, then release the device."""
@@ -29,11 +33,13 @@ class SnapWorker(QThread):
         camera_serial: str | None = None,
         *,
         settings: dict | None = None,
+        timeout_s: float = DEFAULT_SNAP_TIMEOUT_S,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._serial = camera_serial
         self._settings = dict(settings or {})
+        self._timeout_s = float(timeout_s)
 
     def run(self) -> None:
         """Connect, acquire one frame, emit it, and close the camera."""
@@ -48,9 +54,9 @@ class SnapWorker(QThread):
             if self._settings:
                 apply_camera_settings(cam, self._settings)
             start_acquisition(cam)
-            time.sleep(min(0.5, CAMERA_SETTLE_S))
+            time.sleep(min(0.35, CAMERA_SETTLE_S))
             self.status.emit("Capturing frame…")
-            frame = wait_for_frame(cam, timeout_s=15.0)
+            frame = wait_for_frame(cam, timeout_s=self._timeout_s)
             self.frame_ready.emit(np.asarray(frame))
         except Exception as exc:
             self.error.emit(str(exc))

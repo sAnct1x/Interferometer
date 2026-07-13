@@ -272,7 +272,8 @@ class CameraWorker(QThread):
             apply_camera_settings(cam, pending)
             self.settings_updated.emit(read_camera_settings(cam))
         except Exception as exc:
-            self.error.emit(f"Camera settings error: {exc}")
+            # Never escalate settings to error — that stops the live worker mid-stream.
+            self.status.emit(f"Camera settings warning: {exc}")
 
     @staticmethod
     def _as_frame(frame) -> np.ndarray:

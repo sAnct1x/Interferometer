@@ -2,12 +2,12 @@
 
 Production GUI for live Thorcam beam analysis, stage control, and Atria-assisted alignment.
 
-Original scripts now live in `legacy/` inside this repo. This app **copies** their logic into modular modules under `core/` rather than calling them directly.
+Original Thorlabs drivers and λ-scan helpers live in `legacy/` and are still used at runtime via `core/hardware_bridge.py`. Beam math and export live under `core/analytics/`.
 
 ## Setup
 
 ```powershell
-cd "C:\Users\origi\Documents\Interferometer"
+cd "C:\Users\origi\OneDrive\Desktop\College\OSU\2026\Summer 26\interferometer_automation"
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -16,7 +16,7 @@ copy .env.example .env
 python scripts\generate_icon.py
 ```
 
-Close ThorCam GUI before launching. Thorlabs drivers must match the legacy project (`python legacy\check_thorlabs_env.py`).
+Close ThorCam GUI before launching. Thorlabs drivers must match the bench install (`python legacy\check_thorlabs_env.py`).
 
 ## Run
 
@@ -41,7 +41,7 @@ python main.py
   the whole live pipeline; each analysis (beam plots, efficiency, trends, FFT) only runs
   while its tile is on screen, and everything auto-resumes when reopened
 - Live camera with **beam waist** and **fringe** ROI modes (selectable)
-- Real-time 1/e² analysis (same math as `beam_size_analysis.py`)
+- Real-time 1/e² analysis (`core/analytics/beam.py`) with labeled PNG/CSV packages under `outputs/beam/`
 - 3D beam surface + X/Y profiles + waist trend
 - Stage jog, editable limits, **safe home** on crash recovery
 - Wavelength: nominal 520 nm, last scan CSV, or live placeholder

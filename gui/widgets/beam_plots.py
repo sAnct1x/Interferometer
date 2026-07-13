@@ -35,6 +35,7 @@ def _viz_size_policy(widget: QWidget) -> None:
 
 class BeamPlotsPanel(GlassPanel):
     analyze_requested = Signal()
+    export_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, title="3D Beam Profile")
@@ -43,6 +44,8 @@ class BeamPlotsPanel(GlassPanel):
         self._surface3d: BeamSurface3D | None = None
         self._gl_error: str | None = None
         self._live_heatmap_last_t = 0.0
+        self._last_result: dict | None = None
+        self._last_frame: np.ndarray | None = None
 
         layout = QVBoxLayout(self)
         inset = self.content_margins()
@@ -66,6 +69,14 @@ class BeamPlotsPanel(GlassPanel):
         self._analyze_btn.setToolTip("Capture the current live frame and run Gaussian beam fit")
         self._analyze_btn.clicked.connect(self.analyze_requested)
         header_row.addWidget(self._analyze_btn, stretch=0)
+        self._export_btn = BracketButton("Save Report", compact=True)
+        self._export_btn.setEnabled(False)
+        self._export_btn.setToolTip(
+            "Export labeled figures + CSV/summary into outputs/beam/runs/ "
+            "(also updates outputs/beam/latest/). Analyze Beam first."
+        )
+        self._export_btn.clicked.connect(self.export_requested)
+        header_row.addWidget(self._export_btn, stretch=0)
         layout.addLayout(header_row, stretch=0)
 
         viz_row = QHBoxLayout()
@@ -83,7 +94,8 @@ class BeamPlotsPanel(GlassPanel):
         _viz_size_policy(self._gl_stack)
 
         self._gl_placeholder = QLabel(
-            "3D beam surface\nappears here after Analyze Beam\n(drag to rotate)"
+            "3D beam surface\nappears here after Analyze Beam\n"
+            "(drag to rotate · scroll to zoom)"
         )
         self._gl_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._gl_placeholder.setStyleSheet(
@@ -124,6 +136,9 @@ class BeamPlotsPanel(GlassPanel):
 
     def reset(self) -> None:
         self._has_surface = False
+        self._last_result = None
+        self._last_frame = None
+        self._export_btn.setEnabled(False)
         self._summary.setText("Snap a frame or start live feed, then Analyze Beam.")
         self._heatmap_plot.clear()
         self._heatmap_plot.addItem(self._heatmap_img)
@@ -134,7 +149,8 @@ class BeamPlotsPanel(GlassPanel):
         self._y_fit.setData([], [])
         self._gl_stack.setCurrentWidget(self._gl_placeholder)
         self._gl_placeholder.setText(
-            "3D beam surface\nappears here after Analyze Beam\n(drag to rotate)"
+            "3D beam surface\nappears here after Analyze Beam\n"
+            "(drag to rotate · scroll to zoom)"
         )
         if self._gl is not None:
             self._gl.clear()
@@ -142,8 +158,18 @@ class BeamPlotsPanel(GlassPanel):
         self._gl_error = None
 
     def update_analysis(
-        self, result: dict, *, live: bool = False, update_surface: bool = False
+        self,
+        result: dict,
+        *,
+        live: bool = False,
+        update_surface: bool = False,
+        frame: np.ndarray | None = None,
     ) -> None:
+        if not live:
+            self._last_result = dict(result)
+            if frame is not None:
+                self._last_frame = np.asarray(frame).copy()
+            self._export_btn.setEnabled(True)
         w = result.get("one_over_e2_avg_um", float("nan"))
         fx = result.get("fwhm_x_um", float("nan"))
         fy = result.get("fwhm_y_um", float("nan"))
@@ -223,17 +249,21 @@ class BeamPlotsPanel(GlassPanel):
             self._gl_error = str(exc)
 
     def _frame_3d_camera(self, x_max: float, y_max: float, z_max: float) -> None:
+        """Frame the mesh so axis labels sit outside the silhouette.
+
+        GLSurfacePlotItem uses OpenGL X = y_um (rows) and Y = x_um (cols).
+        """
         if self._gl is None:
             return
         from pyqtgraph import Vector
 
-        mid_y = y_max * 0.5
-        mid_x = x_max * 0.5
-        mid_z = z_max * 0.5
-        self._gl.opts["center"] = Vector(mid_y, mid_x, mid_z)
+        # Center on the mesh volume (not swapped — matches BeamSurface3D axes).
+        self._gl.opts["center"] = Vector(y_max * 0.5, x_max * 0.5, z_max * 0.42)
         xy_span = max(x_max, y_max, 1.0)
-        dist = max(xy_span * 2.4, z_max * 5.0, 120.0)
-        self._gl.setCameraPosition(distance=dist, elevation=32, azimuth=-55)
+        dist = max(xy_span * 2.85, z_max * 5.5, 140.0)
+        # Higher elevation + wider azimuth keeps the I-axis spine and peak
+        # leader clear of the mound (was elevation=32, azimuth=-55).
+        self._gl.setCameraPosition(distance=dist, elevation=42, azimuth=-48)
 
     def _update_surface(self, img_bs: np.ndarray) -> None:
         self._ensure_gl()
@@ -253,7 +283,7 @@ class BeamPlotsPanel(GlassPanel):
             x_max, y_max, z_max = self._surface3d.update(z)
             self._has_surface = True
             self._gl_error = None
-            self._frame_3d_camera(y_max, x_max, z_max)
+            self._frame_3d_camera(x_max, y_max, z_max)
             self._gl_stack.setCurrentWidget(self._gl_host)
             self._gl_host.show()
             self._gl.show()
@@ -267,3 +297,11 @@ class BeamPlotsPanel(GlassPanel):
             if "OpenGL" in hint or "opengl" in hint.lower():
                 hint += "\nInstall PyOpenGL: pip install PyOpenGL"
             self._gl_placeholder.setText(f"3D view unavailable\n{hint}")
+
+    def last_analysis(self) -> dict | None:
+        return None if self._last_result is None else dict(self._last_result)
+
+    def last_analysis_frame(self) -> np.ndarray | None:
+        if self._last_frame is None:
+            return None
+        return np.asarray(self._last_frame).copy()

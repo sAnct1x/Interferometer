@@ -33,10 +33,10 @@ class RoiSnapshotPanel(GlassPanel):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        save_btn = BracketButton("Save ROI Box", compact=True)
+        save_btn = BracketButton("Save ROI", compact=True)
         save_btn.setToolTip(
-            "Saves this ROI box's position and size to config.\n"
-            "To capture an image, use Snap Frame in the Live Camera tile."
+            "Save this ROI box position/size to config.\n"
+            "To capture an image, use Snap Frame in the Bench Cameras tile."
         )
         save_btn.clicked.connect(self.capture_requested.emit)
         actions.addWidget(save_btn)

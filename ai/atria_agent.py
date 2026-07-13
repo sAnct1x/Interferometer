@@ -310,7 +310,19 @@ def format_intent_reply(intent: Intent, telemetry: dict) -> str:
         return "Snapping a frame to ROI Snapshot."
 
     if intent.name == "analyze_beam":
-        return "Analyzing beam on the ROI snapshot (or live frame)."
+        return (
+            "Analyzing beam and saving a labeled report under outputs/beam/runs/ "
+            "(latest/ is updated too)."
+        )
+
+    if intent.name == "export_beam_report":
+        return "Exporting the last beam analysis as labeled figures + CSV/summary."
+
+    if intent.name == "open_latest_beam_run":
+        return "Opening the latest beam report in Workspace."
+
+    if intent.name == "analyze_latest_beam_run":
+        return "Reading the latest saved beam package…"
 
     if intent.name == "run_wavelength_scan":
         return "Starting K-Cube fringe scan for wavelength recovery (requires hardware permission)."

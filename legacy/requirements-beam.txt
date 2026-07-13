@@ -1,5 +1,0 @@
-# Beam size measurement scripts (Interferometer_Automation)
-numpy
-matplotlib
-tifffile
-# Camera capture also needs pylablib + Thorlabs ThorCam SDK (see interferometer check_thorlabs_env.py)

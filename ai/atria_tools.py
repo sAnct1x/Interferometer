@@ -14,6 +14,7 @@ REPORT_TOOL_NAMES = frozenset(
         "report_beam_waist",
         "report_efficiency",
         "report_wavelength",
+        "analyze_latest_beam_run",
     }
 )
 

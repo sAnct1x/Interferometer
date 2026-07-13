@@ -1,9 +1,9 @@
-"""Bottom dock for minimized tiles as compact title chips in order."""
+"""Bottom dock for minimized hub tiles as compact title chips."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter, QColor
+from PySide6.QtGui import QPainter, QColor, QMouseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -26,7 +26,7 @@ from gui.ui_scale import minimized_bar_height
 
 
 class MinimizedTileChip(QWidget):
-    """Semi-rectangular minimized tile tab: title on top, window controls along the bottom edge."""
+    """Compact tab: click title to restore; close button dismisses."""
 
     restore_clicked = Signal(str)
     close_clicked = Signal(str)
@@ -34,17 +34,21 @@ class MinimizedTileChip(QWidget):
     def __init__(self, tile_id: str, title: str, parent=None) -> None:
         super().__init__(parent)
         self.tile_id = tile_id
-        self.setFixedSize(156, 46)
+        self.setFixedSize(168, 48)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f"Restore {title}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 4, 8, 4)
         layout.setSpacing(2)
 
-        label = QLabel(title)
-        label.setStyleSheet(primary_style() + " font-weight: bold; background: transparent;")
-        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        layout.addWidget(label)
+        self._label = QLabel(title)
+        self._label.setStyleSheet(
+            primary_style() + " font-weight: bold; background: transparent;"
+        )
+        self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self._label)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
@@ -59,10 +63,9 @@ class MinimizedTileChip(QWidget):
             f"  background: rgba(244,114,182,0.45); border: 1px solid {NEON_CYAN};"
             "}"
         )
-        min_btn = QPushButton("—")
         restore = QPushButton("□")
         close = QPushButton("✕")
-        for btn in (min_btn, restore, close):
+        for btn in (restore, close):
             btn.setFixedSize(22, 18)
             btn.setStyleSheet(btn_style)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -70,10 +73,17 @@ class MinimizedTileChip(QWidget):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        restore.setToolTip("Restore")
+        close.setToolTip("Close")
         restore.clicked.connect(lambda: self.restore_clicked.emit(self.tile_id))
         close.clicked.connect(lambda: self.close_clicked.emit(self.tile_id))
-        min_btn.setEnabled(False)
-        min_btn.setToolTip("Minimized")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.restore_clicked.emit(self.tile_id)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -98,45 +108,48 @@ class MinimizedTileBar(QWidget):
         self._order: list[str] = []
         self._chips: dict[str, MinimizedTileChip] = {}
 
-    def apply_ui_scale(self, scale: float | None = None) -> None:
-        """Rescale the dock height; called by Dashboard alongside every other chrome surface."""
-        self.setFixedHeight(minimized_bar_height(scale))
-
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(8, 2, 8, 2)
-        outer.setSpacing(6)
+        # Layout is created once — apply_ui_scale must not replace it (that made
+        # chips vanish after the first scale refresh).
+        self._outer = QHBoxLayout(self)
+        self._outer.setContentsMargins(8, 2, 8, 2)
+        self._outer.setSpacing(6)
         self._layout = QHBoxLayout()
         self._layout.setSpacing(6)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        outer.addLayout(self._layout)
-        outer.addStretch()
+        self._outer.addLayout(self._layout, stretch=1)
+        self._outer.addStretch(0)
+        self.hide()
+
+    def apply_ui_scale(self, scale: float | None = None) -> None:
+        """Update dock height only; keep the existing chip layout intact."""
+        self.setFixedHeight(minimized_bar_height(scale))
+        for chip in self._chips.values():
+            chip.setFixedSize(168, max(44, minimized_bar_height(scale) - 8))
 
     def add_tile(self, tile_id: str, title: str) -> None:
         if tile_id in self._chips:
+            self.show()
+            self.raise_()
             return
         self._order.append(tile_id)
         chip = MinimizedTileChip(tile_id, title, self)
-        chip.restore_clicked.connect(self.restore_requested)
-        chip.close_clicked.connect(self.close_requested)
+        chip.restore_clicked.connect(self.restore_requested.emit)
+        chip.close_clicked.connect(self.close_requested.emit)
         self._chips[tile_id] = chip
-        self._rebuild()
+        self._layout.addWidget(chip)
+        self.show()
+        self.raise_()
 
     def remove_tile(self, tile_id: str) -> None:
         if tile_id not in self._chips:
             return
         chip = self._chips.pop(tile_id)
+        self._layout.removeWidget(chip)
         chip.deleteLater()
         if tile_id in self._order:
             self._order.remove(tile_id)
-        self._rebuild()
         if not self._order:
             self.hide()
 
-    def _rebuild(self) -> None:
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-        for tile_id in self._order:
-            self._layout.addWidget(self._chips[tile_id])
-        self.show()
+    def has_tiles(self) -> bool:
+        return bool(self._order)

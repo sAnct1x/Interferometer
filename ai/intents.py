@@ -189,6 +189,30 @@ def parse_intent(text: str) -> Intent | None:
     ):
         return Intent("snap_frame", {}, text)
 
+    if re.search(
+        r"\b(analyze|summarize|review|read|explain)\b.*\b(latest|last|saved)\b.*\bbeam\b",
+        t,
+    ) or re.search(
+        r"\b(analyze|summarize|review)\b.*\bbeam\b.*\b(report|run|export|folder|images?|data|package)\b",
+        t,
+    ):
+        return Intent("analyze_latest_beam_run", {}, text)
+
+    if re.search(
+        r"\b(open|show|display|reveal)\b.*\b(latest|last)\b.*\bbeam\b",
+        t,
+    ) or re.search(
+        r"\b(open|show|display|reveal)\b.*\bbeam\b.*\b(report|run|folder|output)\b",
+        t,
+    ):
+        return Intent("open_latest_beam_run", {}, text)
+
+    if re.search(
+        r"\b(save|export)\b.*\b(beam|report|graphs?|figures?|plots?)\b",
+        t,
+    ) or re.search(r"\b(save beam|export beam)\b", t):
+        return Intent("export_beam_report", {}, text)
+
     if re.search(r"\banalyze\b.*\b(beam|snapshot|roi)\b", t):
         return Intent("analyze_beam", {}, text)
 

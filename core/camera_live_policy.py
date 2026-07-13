@@ -92,7 +92,7 @@ def thumb_roles(*, primary: CameraRole, cfg) -> list[CameraRole]:
 def policy_summary(policy: LivePolicy | str) -> str:
     pol = LivePolicy.coerce(policy)
     if pol is LivePolicy.SINGLE:
-        return "Live: primary only · thumbnails: single frozen frame"
+        return "Live: primary camera only (thumbs keep last frame)"
     if pol is LivePolicy.DUAL_EFFICIENCY:
         return "Live: Far Field + Output for η (Image: snap)"
     return "Live: all assigned cameras (may contend on USB)"

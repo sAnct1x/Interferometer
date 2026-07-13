@@ -128,6 +128,11 @@ class CameraViewport(QWidget):
         super().__init__(parent)
         self.setMinimumSize(160, 120)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # ``_source`` is the preview pixmap (sensor or downscaled); ``_pixmap`` is
+        # the widget-fitted copy. Fitting must happen on resize — otherwise a
+        # frame painted while this pane was a thumbnail stays postage-stamp sized
+        # after pop-out / promote.
+        self._source: QPixmap | None = None
         self._pixmap: QPixmap | None = None
         self._idle_text = ""
         self._scale = 1.0
@@ -145,6 +150,7 @@ class CameraViewport(QWidget):
         self.update()
 
     def set_idle(self, text: str) -> None:
+        self._source = None
         self._pixmap = None
         self._idle_text = text
         self._coupling = None
@@ -154,18 +160,48 @@ class CameraViewport(QWidget):
         self,
         pixmap: QPixmap,
         *,
-        scale: float,
-        offset_x: int,
-        offset_y: int,
+        scale: float | None = None,
+        offset_x: int | None = None,
+        offset_y: int | None = None,
         full_size: tuple[int, int],
     ) -> None:
-        self._pixmap = pixmap
+        """Accept a preview pixmap and fit it to the current widget size.
+
+        ``scale`` / offsets are ignored when provided — kept for call-site
+        compatibility. Always re-fit from ``pixmap`` so pop-out / resize works.
+        """
+        self._source = pixmap
         self._idle_text = ""
-        self._scale = scale
-        self._offset_x = offset_x
-        self._offset_y = offset_y
         self._full_size = full_size
+        self._refit()
+
+    def _refit(self) -> None:
+        """Scale ``_source`` into the rounded viewport; no-op if still 0×0."""
+        src = self._source
+        if src is None or src.isNull():
+            return
+        sensor_w, _sensor_h = self._full_size
+        rect = self.viewport_rect()
+        target = rect.adjusted(10, 10, -10, -10)
+        tw, th = int(target.width()), int(target.height())
+        if tw < 2 or th < 2:
+            return
+        scaled = src.scaled(
+            tw,
+            th,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._pixmap = scaled
+        self._scale = scaled.width() / max(1, sensor_w)
+        self._offset_x = int(target.x() + (target.width() - scaled.width()) / 2)
+        self._offset_y = int(target.y() + (target.height() - scaled.height()) / 2)
         self.update()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._source is not None:
+            self._refit()
 
     def viewport_rect(self) -> QRectF:
         return QRectF(self.rect()).adjusted(8, 8, -8, -8)
@@ -475,22 +511,9 @@ def render_frame_to_viewport(
         painter.drawRect(x, y, rw, rh)
         painter.end()
 
-    rect = viewport.viewport_rect()
-    target = rect.adjusted(10, 10, -10, -10)
-    scaled = pix.scaled(
-        max(1, int(target.width())),
-        max(1, int(target.height())),
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.FastTransformation,
-    )
-    # Map sensor coordinates → widget pixels (not preview pixels).
-    viewport.set_frame_pixmap(
-        scaled,
-        scale=scaled.width() / max(1, sensor_w),
-        offset_x=int(target.x() + (target.width() - scaled.width()) / 2),
-        offset_y=int(target.y() + (target.height() - scaled.height()) / 2),
-        full_size=(sensor_w, sensor_h),
-    )
+    # Hand the preview pixmap to the viewport; it fits to its current size
+    # (and again on resize / pop-out). Do not pre-scale to a stale thumb rect.
+    viewport.set_frame_pixmap(pix, full_size=(sensor_w, sensor_h))
 
 
 def _downscale_for_preview(arr: np.ndarray, max_edge: int) -> tuple[np.ndarray, float]:
@@ -1086,6 +1109,11 @@ class CameraView(GlassPanel):
         pane.set_popped(True)
         pane.set_primary(True)  # full-size inside its own tile
         self._relayout_panes()
+        # Thumb-quality decode → pop-out quality, then fit after the tile lays out.
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, lambda r=role: self._redraw(r))
+        QTimer.singleShot(80, lambda r=role: self._redraw(r))
         return pane
 
     def attach_pane(self, role) -> None:
@@ -1414,6 +1442,13 @@ class PopoutCameraPanel(GlassPanel):
         pane.setParent(self)
         self._body.addWidget(pane)
         pane.show()
+        # After the tile gets real geometry, refit any frozen frame.
+        viewport = getattr(pane, "viewport", None)
+        if viewport is not None and hasattr(viewport, "_refit"):
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, viewport._refit)
+            QTimer.singleShot(80, viewport._refit)
 
     def take_pane(self) -> QWidget | None:
         pane = self._pane

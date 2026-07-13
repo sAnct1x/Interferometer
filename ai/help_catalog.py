@@ -89,8 +89,42 @@ HELP_SECTIONS: tuple[tuple[str, tuple[HelpEntry, ...]], ...] = (
             HelpEntry(
                 "analyze_beam",
                 "Analyze beam",
-                "Run beam analysis on the snapshot or live frame.",
+                "Run beam analysis on the snapshot or live frame and save a labeled "
+                "report package under outputs/beam/runs/ (also mirrors to latest/).",
                 ("analyze beam"),
+            ),
+            HelpEntry(
+                "export_beam_report",
+                "Save beam report",
+                "Export the last beam analysis as professional labeled PNGs, CSV, "
+                "and summary into outputs/beam/runs/.",
+                (
+                    "save beam report",
+                    "export beam graphs",
+                    "export beam report",
+                ),
+            ),
+            HelpEntry(
+                "open_latest_beam_run",
+                "Open latest beam run",
+                "Open the newest beam report image in Workspace and reveal the run folder.",
+                (
+                    "open latest beam report",
+                    "show latest beam run",
+                    "open last beam folder",
+                ),
+            ),
+            HelpEntry(
+                "analyze_latest_beam_run",
+                "Analyze latest beam data",
+                "Summarize the newest saved beam package (metrics + artifact list) "
+                "and open the report figure.",
+                (
+                    "analyze latest beam report",
+                    "summarize last beam run",
+                    "analyze beam images",
+                    "review saved beam data",
+                ),
             ),
             HelpEntry(
                 "capture_roi",

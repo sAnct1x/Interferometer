@@ -1,4 +1,4 @@
-"""Vertical fiber output efficiency meter for hollow-core fiber exit (eta)."""
+"""Vertical fiber-output efficiency meter (Far Field → Output coupling η)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPen, QFont
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QLabel, QWidget, QSizePolicy
 
+from config import COUPLING_TARGET_PCT
 from gui.glass_panel import GlassPanel, BracketButton
 from gui.neon_theme import COLOR_BLUE, COLOR_CYAN, COLOR_HOT, COLOR_MAGENTA, COLOR_PURPLE
 from gui.typography import callout_style, hint_style, muted_style
@@ -15,7 +16,11 @@ class EfficiencyMeterPanel(GlassPanel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent, title="Beam Efficiency")
         self._eta: float | None = None
-        self._detail = "Efficiency (η): how much light makes it through the fiber. Not calibrated yet"
+        target = float(COUPLING_TARGET_PCT)
+        self._detail = (
+            f"Start Live Feed — η tracks Far Field → Output automatically "
+            f"(lab target ~{target:.0f}%)"
+        )
 
         layout = QVBoxLayout(self)
         inset = self.content_margins()
@@ -33,22 +38,24 @@ class EfficiencyMeterPanel(GlassPanel):
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._sub)
 
-        self._bar = _ThermoBar()
+        self._bar = _ThermoBar(target_pct=target)
         layout.addWidget(self._bar, stretch=1)
 
-        self._formula = QLabel("η = P(out) / P(in)  ·  fraction of light that makes it through")
+        self._formula = QLabel(
+            f"η = P(out)/P(in)  ·  lab target ~{target:.0f}%  ·  auto-starts with live feed"
+        )
         self._formula.setStyleSheet(hint_style())
         self._formula.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._formula.setToolTip(
-            "Coupling efficiency: how much of the light hitting the fiber comes out "
-            "the other end. See the Learn tile for the full explanation."
+            "Coupling efficiency from Far Field (before fiber) to Output (after fiber). "
+            f"Aim for ~{target:.0f}%. Recalibrate only when you have a known-good alignment."
         )
         layout.addWidget(self._formula)
 
-        self._cal_btn = BracketButton("Set as η = 100%", compact=True)
+        self._cal_btn = BracketButton("Recalibrate 100%", compact=True)
         self._cal_btn.setToolTip(
-            "Use the current reading as the 100% reference, so future readings are "
-            "reported relative to it."
+            "Mark the current Far Field / Output ratio as 100%. "
+            "Live feed already auto-baselines once; use this after a known-good alignment."
         )
         cal_row = QHBoxLayout()
         cal_row.addStretch()
@@ -66,7 +73,7 @@ class EfficiencyMeterPanel(GlassPanel):
             self._bar.set_level(0.0, eta_pct=None)
         else:
             clamped = min(max(float(eta_pct), 0.0), 100.0)
-            self._value.setText(f"{clamped:.2f} %")
+            self._value.setText(f"{clamped:.1f} %")
             self._bar.set_level(clamped / 100.0, eta_pct=clamped)
         if detail:
             self._sub.setText(detail)
@@ -78,21 +85,26 @@ class EfficiencyMeterPanel(GlassPanel):
         return float(eta)
 
     def reset(self) -> None:
+        target = float(COUPLING_TARGET_PCT)
         self.set_efficiency(
             None,
-            detail="Turn on the live feed, then click Set as η = 100% to calibrate",
+            detail=(
+                f"Start Live Feed — η tracks Far Field → Output automatically "
+                f"(lab target ~{target:.0f}%)"
+            ),
         )
 
 
 class _ThermoBar(QWidget):
-    """Vertical η axis with labeled percent ticks and live readout."""
+    """Vertical η axis with labeled percent ticks and a lab-target marker."""
 
     TICK_PCTS = (0, 10, 25, 50, 75, 90, 100)
 
-    def __init__(self) -> None:
+    def __init__(self, *, target_pct: float = 90.0) -> None:
         super().__init__()
         self._level = 0.0
         self._eta_pct: float | None = None
+        self._target_pct = float(target_pct)
         self.setMinimumSize(80, 120)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -115,55 +127,50 @@ class _ThermoBar(QWidget):
         from gui.typography import TEXT_MUTED, TEXT_PRIMARY, body_pt
 
         body = max(8.0, body_pt())
-        title_font = QFont("Consolas", int(body), QFont.Weight.Bold)
-        painter.setFont(title_font)
-        painter.setPen(QColor(TEXT_MUTED))
-        painter.drawText(
-            QRect(inner.left(), inner.top(), axis_w - 4, inner.height()),
-            Qt.AlignmentFlag.AlignCenter,
-            "η\n(%)",
-        )
-
-        painter.fillRect(bar, QColor(15, 8, 35, 190))
-        for width, alpha, color in (
-            (8, 25, COLOR_HOT),
-            (5, 40, COLOR_PURPLE),
-            (2, 80, COLOR_CYAN),
-        ):
-            glow = QPen(QColor(color.red(), color.green(), color.blue(), alpha), width)
-            painter.setPen(glow)
-            painter.drawRect(bar)
-        painter.setPen(QPen(QColor(COLOR_CYAN.red(), COLOR_CYAN.green(), COLOR_CYAN.blue(), 180), 2))
-        painter.drawRect(bar)
+        painter.fillRect(bar, QColor(20, 16, 40))
 
         fill_h = int(bar.height() * self._level)
         if fill_h > 0:
-            grad = QLinearGradient(0, bar.bottom(), 0, bar.top())
-            grad.setColorAt(0.0, QColor(COLOR_PURPLE.red(), COLOR_PURPLE.green(), COLOR_PURPLE.blue(), 240))
-            grad.setColorAt(0.35, QColor(COLOR_MAGENTA.red(), COLOR_MAGENTA.green(), COLOR_MAGENTA.blue(), 240))
-            grad.setColorAt(0.7, QColor(COLOR_BLUE.red(), COLOR_BLUE.green(), COLOR_BLUE.blue(), 240))
-            grad.setColorAt(1.0, QColor(COLOR_CYAN.red(), COLOR_CYAN.green(), COLOR_CYAN.blue(), 255))
-            fill_rect = bar.adjusted(2, bar.height() - fill_h + 2, -2, -2)
-            painter.fillRect(fill_rect, grad)
+            fill = QRect(bar.left(), bar.bottom() - fill_h + 1, bar.width(), fill_h)
+            grad = QLinearGradient(fill.topLeft(), fill.bottomLeft())
+            grad.setColorAt(0.0, COLOR_HOT)
+            grad.setColorAt(0.45, COLOR_MAGENTA)
+            grad.setColorAt(0.75, COLOR_PURPLE)
+            grad.setColorAt(1.0, COLOR_CYAN)
+            painter.fillRect(fill, grad)
 
-        tick_font = QFont("Consolas", int(body))
-        painter.setFont(tick_font)
-        tick_pen = QPen(QColor(TEXT_MUTED))
-        label_pen = QColor(TEXT_PRIMARY)
+        painter.setPen(QPen(COLOR_BLUE, 1))
+        painter.drawRect(bar)
 
+        # Target band (~90%)
+        t = max(0.0, min(1.0, self._target_pct / 100.0))
+        ty = bar.bottom() - int(bar.height() * t)
+        painter.setPen(QPen(COLOR_CYAN, 2, Qt.PenStyle.DashLine))
+        painter.drawLine(bar.left() - 2, ty, bar.right() + 2, ty)
+
+        painter.setFont(QFont("Segoe UI", int(body)))
+        painter.setPen(QColor(TEXT_MUTED))
         for pct in self.TICK_PCTS:
-            y = bar.bottom() - int(bar.height() * pct / 100)
-            painter.setPen(tick_pen)
-            painter.drawLine(bar.right() + 3, y, bar.right() + 11, y)
-            painter.setPen(label_pen)
-            painter.drawText(bar.right() + 13, y + 4, f"{pct:.0f}%")
+            y = bar.bottom() - int(bar.height() * (pct / 100.0))
+            painter.drawLine(bar.right() + 2, y, bar.right() + 8, y)
+            painter.drawText(
+                QRect(bar.right() + 10, y - 8, tick_w - 12, 16),
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                f"{pct}",
+            )
+
+        painter.setPen(QColor(TEXT_PRIMARY))
+        painter.drawText(
+            QRect(inner.left(), bar.top(), axis_w - 2, 18),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
+            "η%",
+        )
 
         if self._eta_pct is not None and self._eta_pct == self._eta_pct:
-            live_y = bar.bottom() - int(bar.height() * self._level)
-            painter.setPen(QPen(QColor(TEXT_MUTED), 2))
-            painter.drawLine(bar.left() - 4, live_y, bar.right() + 2, live_y)
-            live_font = QFont("Consolas", int(body), QFont.Weight.Bold)
-            painter.setFont(live_font)
-            painter.setPen(QColor(TEXT_PRIMARY))
-            live_label = f"{self._eta_pct:.2f}%"
-            painter.drawText(bar.left(), live_y - 14, live_label)
+            live_label = f"{self._eta_pct:.1f}%"
+            painter.setPen(QColor(COLOR_CYAN))
+            painter.drawText(
+                QRect(inner.left(), bar.bottom() - 18, axis_w + bar_w, 18),
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom),
+                live_label,
+            )

@@ -46,6 +46,10 @@ BEAM_WAIST_TARGET_UM = (280.0, 300.0)
 # physical hole the beam must land inside, NOT the waist target above.
 FIBER_TARGET_ID_UM = 450.0
 
+# Lab goal for Far Field → Output coupling once aligned (not a forced readout).
+# The meter marks this as the target; live η auto-baselines on Start Live Feed.
+COUPLING_TARGET_PCT = 90.0
+
 # --- Wedge fiber-coupling bench geometry (520 nm) ---------------------------
 # Two 500 mm arms leave the f=500 mm curved mirror (Mirror 3), fold across the
 # flat silver mirrors (Mirrors 4 & 5), and hit the wedge near the fiber:
@@ -102,7 +106,7 @@ APP_BADGE = "IA"
 # short fallback sleep only used on drivers that do not expose a frame-wait call.
 CAMERA_POLL_MS = 5
 CAMERA_FRAME_WAIT_S = 0.2
-CAMERA_SETTLE_S = 2.0
+CAMERA_SETTLE_S = 0.45
 # Longer wait while hunting for the first frame after connect (USB contention).
 CAMERA_BOOTSTRAP_FRAME_WAIT_S = 1.0
 # If a camera connects and starts acquisition but delivers no frames within this
