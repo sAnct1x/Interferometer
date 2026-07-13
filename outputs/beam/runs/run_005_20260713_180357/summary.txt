@@ -1,0 +1,22 @@
+Interferometer Automation — Beam Analysis Summary
+====================================================
+Run ID:          run_005_20260713_180357
+Analyzed at:     2026-07-13 18:03:57
+Source:          roi_snapshot
+Wavelength:      520.0 nm
+Camera serial:   36158
+ROI (x,y,w,h):   [262, 316, 101, 101]
+
+w₀ (1/e² avg):   293.080139000993 µm
+1/e² X / Y:      292.2532086753505 / 293.9070693266355 µm
+FWHM X / Y:      228.73990835174448 / 228.1200287577799 µm
+M² (proxy):      1.4524904923040949
+Fit quality:     0.8190731064400856
+Background:      580.7835362027926
+
+Artifacts:
+  beam_report.png, beam_heatmap.png, beam_profiles.png,
+  beam_surface_3d.png, results.csv, meta.json
+
+Warnings:
+  - Background is high vs peak; border may still be inside the halo.

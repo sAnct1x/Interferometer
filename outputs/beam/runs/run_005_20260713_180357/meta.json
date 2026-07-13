@@ -1,0 +1,43 @@
+{
+  "run_id": "run_005_20260713_180357",
+  "analyzed_at": "2026-07-13 18:03:57",
+  "source": "roi_snapshot",
+  "wavelength_nm": 520.0,
+  "pixel_size_um": 3.45,
+  "camera_serial": "36158",
+  "roi_xywh": [
+    262,
+    316,
+    101,
+    101
+  ],
+  "beam_waist_target_um": [
+    280.0,
+    300.0
+  ],
+  "fwhm_x_um": 228.73990835174448,
+  "fwhm_y_um": 228.1200287577799,
+  "one_over_e2_x_um": 292.2532086753505,
+  "one_over_e2_y_um": 293.9070693266355,
+  "one_over_e2_avg_um": 293.080139000993,
+  "m2": 1.4524904923040949,
+  "fit_quality": 0.8190731064400856,
+  "background_level": 580.7835362027926,
+  "cropped_shape": [
+    101,
+    101
+  ],
+  "quality_warnings": [
+    "Background is high vs peak; border may still be inside the halo."
+  ],
+  "notes": "",
+  "artifacts": [
+    "beam_report.png",
+    "beam_heatmap.png",
+    "beam_profiles.png",
+    "beam_surface_3d.png",
+    "results.csv",
+    "summary.txt",
+    "meta.json"
+  ]
+}

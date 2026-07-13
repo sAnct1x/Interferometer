@@ -1,0 +1,2 @@
+run_id,analyzed_at,source,wavelength_nm,fwhm_x_um,fwhm_y_um,one_over_e2_x_um,one_over_e2_y_um,one_over_e2_avg_um,m2,fit_quality,background_level,camera_serial,roi_xywh
+run_001_20260713_170750,2026-07-13 17:07:50,unit_test,520.0,96.82082478579352,96.8208247857935,163.22083057031202,163.22083057031202,163.22083057031202,1.0613825918969881,0.9754469632412047,5.0334299846996275,,

@@ -9,7 +9,15 @@ user_config/tile_layout.json
 user_config/tile_layout.log
 user_config/app_config.json
 data/
-outputs/
+
+# Scratch under outputs/ stays local, but beam analysis packages are tracked so
+# school ↔ home review works over GitHub (school OneDrive ≠ personal OneDrive).
+outputs/*
+!outputs/beam/
+!outputs/beam/**
+outputs/test_shots/
+outputs/_*.py
+outputs/launch_error.log
 
 # Python
 __pycache__/
