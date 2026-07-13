@@ -123,15 +123,15 @@ class PanelHeader(QWidget):
                 self._dock.restore_from_bar()
                 return
         elif self._window is not None:
-            from gui.window_controls import is_maximized, toggle_maximize
+            from gui.window_controls import looks_maximized, restore_window, toggle_maximize
 
-            if is_maximized(self._window):
-                toggle_maximize(self._window, getattr(self._window, "_pre_maximize_geometry", None))
+            if looks_maximized(self._window):
+                restore_window(self._window, getattr(self._window, "_pre_maximize_geometry", None))
                 self._window._pre_maximize_geometry = None
             else:
                 self._window._pre_maximize_geometry = self._window.geometry()
                 toggle_maximize(self._window, None)
-            self._update_maximize_button(is_maximized(self._window))
+            self._update_maximize_button(looks_maximized(self._window))
 
 
 def panel_path(rect, chamfer: int = PANEL_CHAMFER_PX) -> QPainterPath:

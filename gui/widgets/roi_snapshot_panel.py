@@ -95,6 +95,9 @@ class RoiSnapshotPanel(GlassPanel):
         self._mode = mode
         self._snapshot_viewport.set_mode(mode)
         self._snapshot_viewport.set_frame(self._snapshot, self._roi)
+        # Force a redraw even when the new frame looks similar to the last one.
+        self._snapshot_viewport.repaint()
+        self.update()
 
     def clear(self) -> None:
         self._snapshot = None

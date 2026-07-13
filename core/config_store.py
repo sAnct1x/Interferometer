@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from config import SUMMER_26_DIR, USER_CONFIG_DIR, LASER_WAVELENGTH_NM
+from config import SUMMER_26_DIR, USER_CONFIG_DIR, LASER_WAVELENGTH_NM, CAMERA_ROLE_SERIALS
 from core.analytics.roi import load_roi_xywh, save_roi_xywh
 from core.camera_roles import ACTIVE_ROLES, CameraRole
 
@@ -41,20 +41,49 @@ class CameraSlot:
 
 
 def _default_cameras() -> list[CameraSlot]:
-    """One slot per active bench role, in display order (Far Field first)."""
+    """One slot per active bench role, pre-bound to the lab Thorcam serials."""
     return [
-        CameraSlot(label=role.label, role=role.value)
+        CameraSlot(
+            label=role.label,
+            role=role.value,
+            serial=CAMERA_ROLE_SERIALS.get(role.value),
+        )
         for role in ACTIVE_ROLES
     ]
 
 
 def _default_camera_roles() -> dict[str, str | None]:
-    """Placeholder role -> serial map for the three-camera bench.
+    """Role -> serial map for the three-camera wedge bench."""
+    return {role.value: CAMERA_ROLE_SERIALS.get(role.value) for role in ACTIVE_ROLES}
 
-    Serials are unknown until hardware arrives; the UI picker fills these in and
-    save_config persists them. Simulation #2 ignores serials entirely.
+
+def apply_bench_camera_serials(cfg: "AppConfig") -> bool:
+    """Force Far Field / Image / Output onto the lab Thorcam serials from ``config.py``.
+
+    Returns True if anything changed. The three CS165MU/CU units on this bench are
+    fixed hardware — Auto / leftover legacy serials caused roles to fight over the
+    same camera, so the lab map is authoritative every launch.
     """
-    return {role.value: None for role in ACTIVE_ROLES}
+    changed = False
+    for role in ACTIVE_ROLES:
+        want = CAMERA_ROLE_SERIALS.get(role.value)
+        if not want:
+            continue
+        slot = cfg.camera_by_role(role)
+        if slot is None:
+            cfg.cameras.append(CameraSlot(label=role.label, role=role.value, serial=want))
+            changed = True
+            continue
+        if slot.serial != want or slot.label != role.label:
+            slot.serial = want
+            slot.label = role.label
+            changed = True
+        cfg.camera_roles[role.value] = want
+    ff = cfg.camera_by_role(CameraRole.FAR_FIELD)
+    if ff is not None and cfg.camera_serial != ff.serial:
+        cfg.camera_serial = ff.serial
+        changed = True
+    return changed
 
 
 @dataclass
@@ -177,7 +206,7 @@ def load_config() -> AppConfig:
             if key in camera_roles:
                 camera_roles[key] = str(serial) if serial else None
 
-    return AppConfig(
+    cfg = AppConfig(
         beam_roi=beam_roi,
         fringe_roi=fringe_roi,
         safe_home_mm=data.get("safe_home_mm"),
@@ -200,6 +229,10 @@ def load_config() -> AppConfig:
         ),
         window_maximized=bool(data.get("window_maximized", True)),
     )
+    # Lab serials win over leftover Auto / legacy / swapped assignments.
+    if apply_bench_camera_serials(cfg):
+        save_config(cfg)
+    return cfg
 
 
 def save_config(cfg: AppConfig) -> None:

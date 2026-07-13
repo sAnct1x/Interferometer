@@ -48,7 +48,33 @@ make absolute positioning unreliable; see the Piezo Stack Report).
 | `CAMERA_MAX_FPS` | 34.8 | Full-frame, USB 3.0 |
 | `CAMERA_READ_NOISE_E` | 4.0 | < 4 e- RMS; simulated feeds add a small read-noise floor |
 
+### Bench serial assignments
+
+| Role | Camera # | Serial | Notes |
+|------|----------|--------|-------|
+| Far Field | 1 | `36158` | Wedge ghost ~500 mm out; coupling reticle |
+| Image | 2 | `38173` | Ghost 2 near fiber plane (optics pending) |
+| Output | 3 | `36143` | After fiber; efficiency η |
+
+Source of truth: `CAMERA_ROLE_SERIALS` in `config.py` (also seeded into
+`user_config/app_config.json`).
+
 ## Still pending mentor input
 - Image camera (Ghost 2): imaged plane, total path length (d_o), and lens element
-  (f) for the thin-lens d_i. `core/optics/image_camera.py` stays disabled until
-  these are known. See `docs/MENTOR_QUESTIONS.md`.
+  (f) for the thin-lens d_i. `core/optics/image_camera.py` is documentation-only;
+  live display uses the raw Thorcam feed — no placement math required in software.
+
+## Camera live policy (`config.CAMERA_LIVE_POLICY`)
+
+Three CS165CU cameras on one USB tree cannot reliably stream simultaneously.
+
+| Policy | Use when |
+|--------|----------|
+| `single` (default) | Alignment or viewing one camera at a time |
+| `dual_efficiency` | Live η needs Far Field + Output together |
+| `all` | Legacy / debugging only |
+
+Non-streaming roles: **Snap Frame** (exclusive USB grab) or **promote** to switch
+the live stream (`single` policy).
+
+See `docs/MENTOR_QUESTIONS.md` for remaining optics inputs.

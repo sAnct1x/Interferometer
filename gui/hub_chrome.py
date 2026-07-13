@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPoint, QRect
+from PySide6.QtCore import Qt, QEvent, QPoint, QRect
 from PySide6.QtGui import QGuiApplication, QPainter, QScreen
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -15,7 +15,12 @@ from PySide6.QtWidgets import (
 
 from config import APP_BADGE, APP_TITLE
 from gui.glass_panel import panel_path
-from gui.window_controls import is_maximized, minimize_window, toggle_maximize
+from gui.window_controls import (
+    looks_maximized,
+    minimize_window,
+    restore_window,
+    toggle_maximize,
+)
 from gui.neon_theme import (
     ACCENT_SYSTEM,
     CHROME_TELEMETRY_GAP_PX,
@@ -84,6 +89,10 @@ class HubChromeBar(QWidget):
         self._max_btn: QPushButton | None = None
         self._win_btns: list[QPushButton] = []
         self._title_label: QLabel | None = None
+        # Must exist before any child installEventFilter — layout/addWidget can
+        # deliver events into eventFilter during construction.
+        self._menu: QMenuBar | None = None
+        self._drag_grip: QWidget | None = None
         self.setFixedHeight(46)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -93,6 +102,7 @@ class HubChromeBar(QWidget):
         self._layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         badge = QLabel(f" {APP_BADGE} ")
+        badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         badge.setStyleSheet(
             f"color: {NEON_CYAN}; font-weight: bold; font-size: {title_px()}px; "
             f"background: rgba(168,85,247,0.25); "
@@ -102,6 +112,7 @@ class HubChromeBar(QWidget):
 
         title = QLabel(APP_TITLE)
         self._title_label = title
+        title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         title.setStyleSheet(
             primary_style() + f" font-size: {title_px()}px; font-weight: bold; background: transparent;"
         )
@@ -112,7 +123,19 @@ class HubChromeBar(QWidget):
         self._menu.setFixedHeight(30)
         self._menu.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self._menu.setStyleSheet(HUB_MENUBAR_STYLESHEET)
-        self._layout.addWidget(self._menu, stretch=1, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self._layout.addWidget(self._menu, stretch=0, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        # Extra empty grab zone so the window can be dragged even when menus
+        # cover most of the chrome (frameless windows have no OS title bar).
+        self._drag_grip = QWidget()
+        self._drag_grip.setMinimumWidth(48)
+        self._drag_grip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._drag_grip.setCursor(Qt.CursorShape.SizeAllCursor)
+        self._layout.addWidget(self._drag_grip, stretch=1)
+
+        # Install filters only after both targets exist (see eventFilter).
+        self._menu.installEventFilter(self)
+        self._drag_grip.installEventFilter(self)
 
         btn_style = (
             "QPushButton {"
@@ -182,13 +205,44 @@ class HubChromeBar(QWidget):
             self._max_btn.setToolTip("Restore" if maximized else "Maximize")
 
     def _toggle_max(self) -> None:
-        if is_maximized(self._window):
-            toggle_maximize(self._window, getattr(self._window, "_pre_maximize_geometry", None))
+        if looks_maximized(self._window):
+            pre = getattr(self._window, "_pre_maximize_geometry", None)
+            restore_window(self._window, pre)
             self._window._pre_maximize_geometry = None
         else:
             self._window._pre_maximize_geometry = self._window.geometry()
             toggle_maximize(self._window, None)
-        self.set_maximized_state(is_maximized(self._window))
+        self.set_maximized_state(looks_maximized(self._window))
+
+    def eventFilter(self, obj, event):
+        """Forward empty chrome / menubar presses so the whole title strip can drag."""
+        grip = self._drag_grip
+        menu = self._menu
+        if grip is None or menu is None:
+            return super().eventFilter(obj, event)
+        et = event.type()
+        if obj is grip:
+            if et == QEvent.Type.MouseButtonPress:
+                self.mousePressEvent(event)
+                return True
+            if et == QEvent.Type.MouseMove:
+                self.mouseMoveEvent(event)
+                return True
+            if et == QEvent.Type.MouseButtonRelease:
+                self.mouseReleaseEvent(event)
+                return True
+        if obj is menu and et == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton and menu.actionAt(event.pos()) is None:
+                self.mousePressEvent(event)
+                return True
+        if obj is menu and self._drag_pos is not None:
+            if et == QEvent.Type.MouseMove and event.buttons() & Qt.MouseButton.LeftButton:
+                self.mouseMoveEvent(event)
+                return True
+            if et == QEvent.Type.MouseButtonRelease:
+                self.mouseReleaseEvent(event)
+                return True
+        return super().eventFilter(obj, event)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -213,25 +267,18 @@ class HubChromeBar(QWidget):
     def mouseMoveEvent(self, event) -> None:
         if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
             self._did_drag = True
-            if is_maximized(self._window):
-                from gui.window_controls import restore_window, screen_for_widget
-
-                # Prefer a saved windowed geometry; fall back to a sensible 70 × 80 % window
-                # instead of the full-screen "normal" size Qt would otherwise restore.
+            if looks_maximized(self._window):
                 pre_geo = getattr(self._window, "_pre_maximize_geometry", None)
-                if pre_geo is None:
-                    screen = screen_for_widget(self._window)
-                    if screen is not None:
-                        avail = screen.availableGeometry()
-                        w = int(avail.width() * 0.70)
-                        h = int(avail.height() * 0.80)
-                        cx = event.globalPosition().toPoint().x()
-                        x = max(avail.left(), min(cx - w // 2, avail.right() - w))
-                        pre_geo = QRect(x, avail.top() + 20, w, h)
-                restore_window(self._window, pre_geo)
+                cursor = event.globalPosition().toPoint()
+                restore_window(self._window, pre_geo, cursor_global=cursor)
                 self._window._pre_maximize_geometry = None
                 self.set_maximized_state(False)
-                self._drag_pos = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+                # Keep the cursor over the chrome while the window shrinks under it.
+                geo = self._window.frameGeometry()
+                self._drag_pos = QPoint(
+                    max(24, min(cursor.x() - geo.left(), geo.width() - 24)),
+                    max(8, min(cursor.y() - geo.top(), 40)),
+                )
             self._window.move(event.globalPosition().toPoint() - self._drag_pos)
             self._update_snap_preview(event.globalPosition().toPoint())
             event.accept()
@@ -247,6 +294,8 @@ class HubChromeBar(QWidget):
         # Trigger one deferred screen check so scale + tiles update after the drag lands.
         if hasattr(self._window, "_schedule_display_refresh"):
             self._window._schedule_display_refresh(delay_ms=120)
+        self.set_maximized_state(looks_maximized(self._window))
+        event.accept()
 
     def _half_snap_fits(self, screen: QScreen) -> bool:
         """False when half this monitor is narrower than the app's own min width.

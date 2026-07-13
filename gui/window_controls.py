@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect
+from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QGuiApplication, QScreen
 from PySide6.QtWidgets import QWidget
 
@@ -138,16 +138,90 @@ def is_maximized(widget: QWidget) -> bool:
     return bool(widget.windowState() & Qt.WindowState.WindowMaximized)
 
 
+def is_nearly_fullscreen(rect: QRect, screen: QScreen | None, *, frac: float = 0.9) -> bool:
+    """True when ``rect`` covers most of the screen's available area."""
+    if screen is None or not rect.isValid():
+        return False
+    avail = screen.availableGeometry()
+    return (
+        rect.width() >= int(avail.width() * frac)
+        and rect.height() >= int(avail.height() * frac)
+    )
+
+
+def looks_maximized(widget: QWidget) -> bool:
+    """True when the window is maximized or sized like a maximized frameless window.
+
+    Frameless launches often fill the screen with ``setGeometry(available)`` and the
+    ``WindowMaximized`` flag. If restore clears the flag without shrinking, the UI
+    still looks maximized — treat that the same for chrome buttons and drag-to-restore.
+    """
+    if is_maximized(widget):
+        return True
+    return is_nearly_fullscreen(widget.geometry(), screen_for_widget(widget))
+
+
+def default_windowed_geometry(
+    widget: QWidget,
+    *,
+    cursor_global: QPoint | None = None,
+    screen: QScreen | None = None,
+) -> QRect:
+    """A clearly-windowed size so Restore / drag-off-maximize is visible.
+
+    Always insets from the monitor edges so the window can be grabbed and dragged
+    to another display (a full-screen ``showNormal`` looks like a no-op Restore).
+    """
+    screen = screen or screen_for_widget(widget)
+    if screen is None:
+        return QRect(80, 80, 1280, 720)
+    avail = screen.availableGeometry()
+    # Prefer ~70×80%, but always leave a margin so Restore is obvious.
+    margin = 48
+    max_w = max(1, avail.width() - margin)
+    max_h = max(1, avail.height() - margin)
+    w = min(max(widget.minimumWidth(), int(avail.width() * 0.70)), max_w)
+    h = min(max(widget.minimumHeight(), int(avail.height() * 0.80)), max_h)
+    w = max(w, min(widget.minimumWidth(), avail.width()))
+    h = max(h, min(widget.minimumHeight(), avail.height()))
+    if cursor_global is not None:
+        x = max(avail.left(), min(cursor_global.x() - w // 2, avail.right() - w + 1))
+        y = max(avail.top(), min(cursor_global.y() - 24, avail.bottom() - h + 1))
+    else:
+        x = avail.left() + max(0, (avail.width() - w) // 2)
+        y = avail.top() + max(margin // 2, (avail.height() - h) // 10)
+    return QRect(x, y, w, h)
+
+
 def minimize_window(widget: QWidget) -> None:
     """Minimize frameless top-level windows reliably on Windows."""
     widget.setWindowState(widget.windowState() | Qt.WindowState.WindowMinimized)
 
 
-def restore_window(widget: QWidget, geometry=None) -> None:
+def restore_window(
+    widget: QWidget,
+    geometry=None,
+    *,
+    cursor_global=None,
+) -> None:
+    """Leave maximized / faux-fullscreen and land on a real windowed rect.
+
+    If ``geometry`` is missing or still fills the screen (common on first launch,
+    when nothing was saved before maximize), pick a default inset window instead
+    of calling ``showNormal()`` alone — that would leave a full-screen frame and
+    make Restore look broken.
+    """
+    screen = screen_for_widget(widget)
+    rect = QRect(geometry) if isinstance(geometry, QRect) else None
+    if rect is None or not rect.isValid() or is_nearly_fullscreen(rect, screen):
+        rect = default_windowed_geometry(widget, cursor_global=cursor_global, screen=screen)
     widget.showNormal()
-    widget.setWindowState(widget.windowState() & ~Qt.WindowState.WindowMaximized)
-    if geometry is not None:
-        widget.setGeometry(geometry)
+    widget.setWindowState(
+        widget.windowState()
+        & ~Qt.WindowState.WindowMaximized
+        & ~Qt.WindowState.WindowMinimized
+    )
+    widget.setGeometry(rect)
     widget.raise_()
     widget.activateWindow()
 
@@ -171,6 +245,11 @@ def maximize_on_screen(widget: QWidget, screen: QScreen | None = None) -> None:
         and abs(geo.y() - available.y()) <= 3
     ):
         return
+    # Remember a usable restore size before filling the screen when the caller
+    # did not already stash one (first launch / snap-to-top).
+    pre = getattr(widget, "_pre_maximize_geometry", None)
+    if pre is None or not isinstance(pre, QRect) or not pre.isValid() or is_nearly_fullscreen(pre, current or screen):
+        widget._pre_maximize_geometry = default_windowed_geometry(widget, screen=current or screen)
     widget.showNormal()
     assign_to_screen(widget, screen)
     widget.setGeometry(available)
@@ -195,7 +274,7 @@ def show_maximized_on_primary(widget: QWidget) -> None:
 
 def toggle_maximize(widget: QWidget, restore_geometry=None) -> None:
     """Toggle maximize, restoring to restore_geometry when un-maximizing."""
-    if is_maximized(widget):
+    if looks_maximized(widget):
         restore_window(widget, restore_geometry)
     else:
         maximize_on_screen(widget)

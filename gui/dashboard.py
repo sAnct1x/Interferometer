@@ -17,13 +17,19 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
-from config import APP_TITLE, ICONS_DIR, LASER_WAVELENGTH_NM, DATA_DIR, OUTPUT_DIR
+from config import APP_TITLE, CAMERA_LIVE_POLICY, ICONS_DIR, LASER_WAVELENGTH_NM, DATA_DIR, OUTPUT_DIR
 from core.analytics.beam import analyze_frame, crop_box_from_xywh, roi_mean
 from core.analytics.beam_quality import analyze_beam_quality
 from core.analytics.coupling import coupling_overlay, default_target_center
 from core.analytics.efficiency import coupling_efficiency_percent, dual_camera_efficiency_percent
 from core.analytics.interferometer import recover_wavelength_from_csv
 from core.camera_roles import ACTIVE_ROLES, CameraRole
+from core.camera_live_policy import (
+    LivePolicy,
+    policy_summary,
+    streaming_roles,
+    thumb_roles,
+)
 from core.camera_worker import CameraWorker
 from core.hardware_bridge import list_cameras
 from core.snap_worker import SnapWorker
@@ -248,6 +254,7 @@ class Dashboard(QMainWindow):
         # same physical camera.
         self._role_actual_serial: dict[CameraRole, str] = {}
         self._camera_live = False  # overall live-feed state (any role active)
+        self._pending_camera_roles: list[CameraRole] = []
         # Live acquisition is paused when the Live Camera tile is hidden/minimized and
         # auto-resumed when it is shown again (see _on_camera_tile_visibility).
         self._camera_resume_on_show = False
@@ -264,6 +271,12 @@ class Dashboard(QMainWindow):
         self._simulation_generator = SimulationFrameGenerator(load_config())
         self._scan_worker: WavelengthScanWorker | None = None
         self._snap_worker: SnapWorker | None = None
+        self._snap_role: CameraRole | None = None
+        self._auto_snap_roles: set[CameraRole] = set()
+        # Non-primary roles: one frozen snap each, then open the primary live stream.
+        self._pending_thumb_snaps: list[CameraRole] = []
+        self._resume_primary_after_thumbs = False
+        self._snap_from_thumb_queue = False
         self._resume_live_after_scan = False
         self._fft_times: list[float] = []
         self._fft_samples: list[float] = []
@@ -399,16 +412,10 @@ class Dashboard(QMainWindow):
             return
 
         screen = screen_for_widget(self)
-        maximized = is_maximized(self)
-        nearly_full = False
-        if screen is not None:
-            avail = screen.availableGeometry()
-            geo = self.geometry()
-            nearly_full = (
-                geo.width() >= int(avail.width() * 0.9)
-                and geo.height() >= int(avail.height() * 0.9)
-            )
-        if maximized or nearly_full:
+        # Only re-maximize when the OS/Qt maximized flag is set. Do NOT treat a
+        # large windowed frame as maximized — that made Restore look broken
+        # (showNormal left a full-screen rect, then this snapped it back).
+        if is_maximized(self):
             maximize_on_screen(self, screen)
         self._schedule_display_refresh()
 
@@ -952,12 +959,13 @@ class Dashboard(QMainWindow):
     def _wire_signals(self) -> None:
         self._camera_panel._mode_combo.currentIndexChanged.connect(self._switch_roi_mode)
         self._camera_panel.snapshot_captured.connect(self._on_snapshot_captured)
-        self._camera_panel.snap_requested.connect(self._grab_single_frame)
+        self._camera_panel.snap_requested.connect(self._grab_single_frame_for_role)
         self._camera_panel.live_feed_toggled.connect(self._on_live_feed_toggled)
         self._camera_panel.camera_settings_changed.connect(self._on_camera_settings_changed)
         self._camera_panel.camera_label_changed.connect(self._on_camera_label_changed)
         self._camera_panel.popout_requested.connect(self._popout_camera)
         self._camera_panel.popin_requested.connect(self._popin_camera)
+        self._camera_panel.primary_role_changed.connect(self._on_primary_camera_role_changed)
         self._camera_panel.camera_selection_changed.connect(self._on_camera_selection_changed)
         self._camera_panel.refresh_cameras_requested.connect(self._refresh_available_cameras)
         self._sim2.frames_ready.connect(self._on_sim2_frames)
@@ -996,14 +1004,92 @@ class Dashboard(QMainWindow):
         else:
             self._stop_camera()
 
+    def _popped_roles(self) -> set[CameraRole]:
+        return {r for r in ACTIVE_ROLES if self._camera_panel.is_popped(r)}
+
     def _live_roles(self) -> list[CameraRole]:
-        """Roles to bring up on Start Live Feed: Far Field always, others if assigned."""
-        roles = [CameraRole.FAR_FIELD]
-        for role in (CameraRole.IMAGE, CameraRole.OUTPUT):
-            slot = self._cfg.camera_by_role(role)
-            if slot is not None and slot.serial:
-                roles.append(role)
-        return roles
+        """Roles that should hold an open worker for the current live-feed policy."""
+        return streaming_roles(
+            CAMERA_LIVE_POLICY,
+            primary=self._camera_panel.primary_role(),
+            popped=self._popped_roles(),
+            cfg=self._cfg,
+        )
+
+    def _serial_for_role(self, role: CameraRole) -> str | None:
+        slot = self._cfg.camera_by_role(role)
+        if slot is not None and slot.serial:
+            return slot.serial
+        return self._role_actual_serial.get(role)
+
+    def _show_role_standby(self, role: CameraRole) -> None:
+        """Non-streaming role: keep frozen snap if we have one, else a short hint."""
+        if role is CameraRole.FAR_FIELD:
+            self._camera_panel.set_coupling_overlay(None, role)
+        if self._camera_panel.role_frame(role) is not None:
+            return
+        self._camera_panel.show_role_status(
+            role, f"{role.label}\n\nFrozen snap\n(promote for live)"
+        )
+
+    def _thumb_roles(self) -> list[CameraRole]:
+        return thumb_roles(primary=self._camera_panel.primary_role(), cfg=self._cfg)
+
+    def _reconcile_camera_workers(self, *, refresh_thumbs: bool = True) -> None:
+        """Only the primary streams live; other roles become frozen snaps."""
+        primary = self._camera_panel.primary_role()
+        allowed = set(self._live_roles())
+
+        # Exclusive USB: stop every non-primary worker first (keep last frame as snap).
+        for role in ACTIVE_ROLES:
+            if role not in allowed and self._role_live.get(role):
+                self._stop_role_worker(role, keep_preview=True)
+                self._show_role_standby(role)
+
+        self._sync_camera_preview_rates()
+        self._camera_live = True
+
+        if refresh_thumbs:
+            # Snap thumbs with exclusive USB, then open the primary live streamer.
+            self._queue_thumb_snaps_then_live(primary)
+        else:
+            if not self._role_live.get(primary):
+                self._start_role_worker(primary)
+            self._refresh_status()
+
+    def _queue_thumb_snaps_then_live(self, primary: CameraRole) -> None:
+        """Grab one frozen frame per non-primary role, then start primary live."""
+        del primary  # primary is re-read when the queue finishes
+        if self._snap_worker is not None and self._snap_worker.isRunning():
+            self._resume_primary_after_thumbs = True
+            for r in self._thumb_roles():
+                if r not in self._pending_thumb_snaps:
+                    self._pending_thumb_snaps.append(r)
+            return
+        self._pending_thumb_snaps = list(self._thumb_roles())
+        self._resume_primary_after_thumbs = True
+        for role in self._pending_thumb_snaps:
+            if self._camera_panel.role_frame(role) is None:
+                self._camera_panel.show_role_status(
+                    role, f"{role.label}\n\nCapturing snap…"
+                )
+        self._advance_thumb_snap_queue()
+
+    def _advance_thumb_snap_queue(self) -> None:
+        """Process next pending thumb snap, or start the primary live worker."""
+        if self._pending_thumb_snaps:
+            role = self._pending_thumb_snaps.pop(0)
+            self._grab_single_frame_for_role(role.value, from_thumb_queue=True)
+            return
+        if self._resume_primary_after_thumbs:
+            self._resume_primary_after_thumbs = False
+            primary = self._camera_panel.primary_role()
+            if not self._role_live.get(primary):
+                self._start_role_worker(primary)
+            self._camera_live = True
+            self._defer_screen_refit_until = time.time() + 5.0
+            self._sync_camera_preview_rates()
+            self._refresh_status()
 
     def _on_camera_settings_changed(self, settings: dict) -> None:
         role = CameraRole.coerce(settings.get("role", "far_field"))
@@ -1080,16 +1166,42 @@ class Dashboard(QMainWindow):
         serial = slot.serial if slot else None
         if not serial:
             serial = self._pick_auto_serial(role)
+        if not serial:
+            self._camera_panel.show_role_error(
+                role, "No camera serial assigned.\nPick a device in Cam:."
+            )
+            return False
+        self._camera_panel.show_role_status(
+            role, f"{role.label}\n\nConnecting to {serial}…"
+        )
         worker = CameraWorker(serial, self)
+        # Match USB/streaming mode before the thread opens the device.
+        tier = self._camera_panel.preview_tier(role)
+        worker.set_streaming_mode(tier in ("primary", "popout"))
+        settings = self._camera_panel.stored_camera_settings(role)
+        if settings.get("exposure_us") is not None:
+            worker.queue_settings({"exposure_us": settings["exposure_us"]})
+        # Ghost-beam paths are often much dimmer — borrow Far Field exposure when
+        # Image/Output are still on the UI default until the operator tunes them.
+        if role in (CameraRole.IMAGE, CameraRole.OUTPUT):
+            ui_exp = float(settings.get("exposure_us") or 0)
+            ff_exp = float(self._last_exp_us.get(CameraRole.FAR_FIELD, 0))
+            if ff_exp > 0 and ui_exp <= 15_000:
+                worker.queue_settings({"exposure_us": ff_exp})
+        if settings.get("fps_auto") is not None:
+            payload: dict = {"fps_auto": settings["fps_auto"]}
+            if not settings.get("fps_auto") and settings.get("fps_hz"):
+                payload["fps_hz"] = settings["fps_hz"]
+            worker.queue_settings(payload)
         worker.frame_ready.connect(
-            lambda f, rr=role: self._on_role_frame(rr, f),
+            lambda f, rr=role, w=worker: self._on_role_frame(rr, f, w),
             Qt.ConnectionType.QueuedConnection,
         )
-        worker.error.connect(lambda e, rr=role: self._on_camera_error(f"{rr.label}: {e}"))
+        worker.error.connect(lambda e, rr=role: self._on_role_camera_error(rr, e))
         if role == CameraRole.FAR_FIELD:
             worker.status.connect(self._on_camera_status)
         else:
-            worker.status.connect(lambda _s: None)
+            worker.status.connect(lambda s, rr=role: self._on_role_camera_status(rr, s))
         worker.connected.connect(lambda s, rr=role: self._on_role_camera_connected(rr, s))
         worker.settings_updated.connect(
             lambda s, rr=role: self._on_camera_settings_updated(s, rr)
@@ -1097,9 +1209,38 @@ class Dashboard(QMainWindow):
         worker.start()
         self._camera_workers[role] = worker
         self._role_live[role] = True
-        if serial:
-            self._camera_panel.set_camera_serial(role, serial)
+        self._camera_panel.set_camera_serial(role, serial)
+        self._apply_preview_rate(role, worker)
         return True
+
+    def _on_primary_camera_role_changed(self, _role_value: str) -> None:
+        if self._camera_live and not self._simulation_active and not self._sim2_camera_mode:
+            # Demoted camera keeps its last frame as the frozen thumb; new primary goes live.
+            self._reconcile_camera_workers(refresh_thumbs=True)
+        else:
+            self._sync_camera_preview_rates()
+
+    def _apply_preview_rate(self, role: CameraRole, worker: CameraWorker | None = None) -> None:
+        """Primary streams continuously; thumbnails grab one frame periodically."""
+        from config import CAMERA_POPOUT_FPS, CAMERA_THUMB_PERIOD_S, CAMERA_UI_FPS
+
+        worker = worker or self._camera_workers.get(role)
+        if worker is None or not worker.isRunning():
+            return
+        tier = self._camera_panel.preview_tier(role)
+        continuous = tier in ("primary", "popout")
+        worker.set_streaming_mode(continuous)
+        if tier == "primary":
+            worker.set_emit_interval(1.0 / max(1.0, float(CAMERA_UI_FPS)))
+        elif tier == "popout":
+            worker.set_emit_interval(1.0 / max(1.0, float(CAMERA_POPOUT_FPS)))
+        else:
+            worker.set_emit_interval(float(CAMERA_THUMB_PERIOD_S))
+
+    def _sync_camera_preview_rates(self) -> None:
+        """Recompute emit intervals after promote / pop-out / pop-in."""
+        for role in ACTIVE_ROLES:
+            self._apply_preview_rate(role)
 
     def _pick_auto_serial(self, role: CameraRole) -> str | None:
         """Best-effort pick for a role left on "Auto": skip serials other roles already
@@ -1121,10 +1262,22 @@ class Dashboard(QMainWindow):
         return candidates[0] if candidates else None
 
     def _on_role_camera_connected(self, role: CameraRole, serial: str) -> None:
-        """Record the serial a role's worker actually connected to (useful when the
-        role was left on "Auto") and reflect it back into the device picker."""
-        self._role_actual_serial[role] = serial
-        self._camera_panel.set_camera_serial(role, serial)
+        """Record the serial a role's worker actually connected to.
+
+        Do not push placeholder strings like ``Thorcam`` into the Cam: picker —
+        that overwrote the lab assignment and left roles looking unassigned.
+        """
+        cleaned = (serial or "").strip()
+        if cleaned and cleaned.lower() != "thorcam":
+            self._role_actual_serial[role] = cleaned
+            slot = self._cfg.camera_by_role(role)
+            # Only update the picker when this matches (or fills) the configured slot.
+            if slot is not None and (not slot.serial or slot.serial == cleaned):
+                if slot.serial != cleaned:
+                    slot.serial = cleaned
+                    self._cfg.camera_roles[role.value] = cleaned
+                    save_config(self._cfg)
+                self._camera_panel.set_camera_serial(role, cleaned)
         self._refresh_status(camera_far_field="Active")
 
     def _start_camera(self) -> None:
@@ -1132,16 +1285,38 @@ class Dashboard(QMainWindow):
             self._stop_simulation()
         if self._sim2_camera_mode:
             self._stop_simulation_two()
-        started = False
-        for role in self._live_roles():
-            if self._start_role_worker(role):
-                started = True
-        if started:
-            self._camera_live = True
-            self._defer_screen_refit_until = time.time() + 5.0
-            self._refresh_status()
+        # Production rule: snap the two thumbnails, then live-stream only the primary.
+        self._pending_camera_roles = []
+        self._camera_live = True
+        self._toast.show_message(policy_summary(CAMERA_LIVE_POLICY), kind="info")
+        for role in list(self._camera_workers):
+            if self._role_live.get(role):
+                self._stop_role_worker(role, keep_preview=True)
+        self._reconcile_camera_workers(refresh_thumbs=True)
 
-    def _stop_role_worker(self, role: CameraRole) -> None:
+    def _start_next_pending_camera(self) -> None:
+        pending = getattr(self, "_pending_camera_roles", None)
+        if not pending:
+            if any(self._role_live.values()):
+                self._camera_live = True
+                self._defer_screen_refit_until = time.time() + 5.0
+                self._sync_camera_preview_rates()
+                for role in ACTIVE_ROLES:
+                    if role not in set(self._live_roles()):
+                        self._show_role_standby(role)
+                self._refresh_status()
+            return
+        role = pending.pop(0)
+        started = self._start_role_worker(role)
+        if not started:
+            # Skip to the next role immediately.
+            QTimer.singleShot(0, self._start_next_pending_camera)
+            return
+        # Stagger opens when multiple roles are allowed (dual / all policies).
+        delay = 900 if len(getattr(self, "_pending_camera_roles", [])) > 0 else 0
+        QTimer.singleShot(delay, self._start_next_pending_camera)
+
+    def _stop_role_worker(self, role: CameraRole, *, keep_preview: bool = False) -> None:
         """Stop and release a single role's camera worker, if one is running."""
         worker = self._camera_workers.get(role)
         if worker is not None:
@@ -1149,11 +1324,18 @@ class Dashboard(QMainWindow):
             worker.wait(3000)
             self._camera_workers[role] = None
         self._role_live[role] = False
-        self._last_frame[role] = None
+        if not keep_preview:
+            self._last_frame[role] = None
+        elif role is CameraRole.FAR_FIELD:
+            self._camera_panel.set_coupling_overlay(None, role)
         self._role_display_last_t[role] = 0.0
         self._role_actual_serial.pop(role, None)
 
     def _stop_camera(self) -> None:
+        self._pending_camera_roles = []
+        self._pending_thumb_snaps = []
+        self._resume_primary_after_thumbs = False
+        self._auto_snap_roles.clear()
         for role in list(self._camera_workers):
             self._stop_role_worker(role)
         if self._simulation_active:
@@ -1173,42 +1355,101 @@ class Dashboard(QMainWindow):
         self._update_telemetry(beam_waist_um=None, efficiency_pct=None, status="Camera off")
 
     def _on_camera_error(self, message: str) -> None:
+        """Legacy single-feed error path (Simulation #1 / snap helpers)."""
         self._stop_camera()
         self._camera_panel.set_live_active(False)
         self._show_error(message)
 
+    def _on_role_camera_error(self, role: CameraRole, message: str) -> None:
+        """Stop only the failing role so the other two live feeds keep running."""
+        self._stop_role_worker(role)
+        self._camera_panel.show_role_error(role, message)
+        still_live = any(self._role_live.values())
+        self._camera_live = still_live
+        if not still_live:
+            self._camera_panel.set_live_active(False)
+        self._refresh_status()
+        self._toast.show_message(f"{role.label}: {message}", kind="error")
+        self._log_action(f"{role.label} camera error: {message}")
+
+    def _on_role_camera_status(self, role: CameraRole, status: str) -> None:
+        # Once real frames are flowing for this role, never overwrite the live
+        # image with a status message (that would blank the feed).
+        if self._last_frame.get(role) is not None:
+            return
+        s = status.lower()
+        slot = self._cfg.camera_by_role(role)
+        serial = slot.serial if slot and slot.serial else ""
+        if "connecting" in s:
+            detail = f"Connecting to {serial}…" if serial else status
+            self._camera_panel.show_role_status(role, f"{role.label}\n\n{detail}")
+        elif "no frames" in s:
+            self._camera_panel.show_role_status(role, f"{role.label}\n\n{status}")
+            # Live stream connected but sensor silent — fall back to an exclusive
+            # single-frame grab (same path as Snap Frame) once per role per session.
+            if (
+                role == self._camera_panel.primary_role()
+                and role not in self._auto_snap_roles
+                and (self._snap_worker is None or not self._snap_worker.isRunning())
+            ):
+                self._auto_snap_roles.add(role)
+                QTimer.singleShot(400, lambda rv=role.value: self._grab_single_frame_for_role(rv))
+        elif "active" in s:
+            # Connect succeeded; distinguish this from a connect hang while we
+            # wait for the first frame to land.
+            where = f" to {serial}" if serial else ""
+            self._camera_panel.show_role_status(
+                role, f"{role.label}\n\nConnected{where}\nWaiting for frames…"
+            )
+
     def _on_camera_status(self, status: str) -> None:
         self._update_telemetry(status=status)
-        if "active" in status.lower():
+        s = status.lower()
+        if "active" in s:
             self._refresh_status(camera_far_field="Active")
+        if "connecting" in s or "no frames" in s or "active" in s:
+            self._on_role_camera_status(CameraRole.FAR_FIELD, status)
 
     def _on_frame(self, frame: np.ndarray) -> None:
         # Far Field entry point (also used by Simulation #1's single feed).
         self._last_frame[CameraRole.FAR_FIELD] = frame
-        # Cap main-thread processing at 20 FPS regardless of camera hardware rate.
+        # Cap main-thread processing at ~12 FPS regardless of camera hardware rate.
         now = time.time()
-        if now - self._last_frame_processed_t < 0.05:
+        if now - self._last_frame_processed_t < (1.0 / 12.0):
             return
         self._last_frame_processed_t = now
         self._process_frame(frame)
 
-    def _on_role_frame(self, role: CameraRole, frame: np.ndarray) -> None:
-        if role == CameraRole.FAR_FIELD:
-            self._on_frame(frame)
-            return
-        self._last_frame[role] = frame
-        now = time.time()
-        repaint = now - self._role_display_last_t.get(role, 0.0) >= 0.1
-        if repaint:
+    def _on_role_frame(self, role: CameraRole, frame: np.ndarray, worker=None) -> None:
+        try:
+            if role == CameraRole.FAR_FIELD:
+                self._on_frame(frame)
+                return
+            self._last_frame[role] = frame
+            # Always cache the frame so promoting this role to primary can redraw
+            # immediately, even if we skip a pixmap refresh this tick.
+            self._camera_panel.set_role_frame(role, frame, repaint=False)
+            now = time.time()
+            if now - self._role_display_last_t.get(role, 0.0) < (1.0 / 12.0):
+                return
             self._role_display_last_t[role] = now
-        self._camera_panel.set_role_frame(role, frame, repaint=repaint)
-        if role == CameraRole.OUTPUT:
-            self._compute_live_efficiency()
+            self._camera_panel.set_role_frame(role, frame, repaint=True)
+            if role == CameraRole.OUTPUT:
+                self._compute_live_efficiency()
+        finally:
+            # Let the worker emit again (coalesced latest frame). Without this,
+            # QueuedConnection piles up full-res arrays and freezes the UI.
+            if worker is not None:
+                worker.acknowledge_frame()
 
     def _compute_live_efficiency(self) -> None:
         """Live η: (Output/exp_out) / (Far Field/exp_in) vs the calibrated ratio."""
         if not self._is_tile_open("efficiency"):
             return
+        now = time.time()
+        if now - getattr(self, "_efficiency_last_t", 0.0) < 0.25:
+            return
+        self._efficiency_last_t = now
         ff = self._last_frame.get(CameraRole.FAR_FIELD)
         out = self._last_frame.get(CameraRole.OUTPUT)
         if ff is None or out is None:
@@ -1241,34 +1482,68 @@ class Dashboard(QMainWindow):
 
     def _refresh_available_cameras(self) -> None:
         """Rescan connected Thorcams and refresh every role's device picker."""
+        from core.config_store import apply_bench_camera_serials
+
+        # Keep the lab map pinned even if an earlier session saved Auto/nulls.
+        if apply_bench_camera_serials(self._cfg):
+            save_config(self._cfg)
+            for slot in self._cfg.cameras:
+                self._camera_panel.set_camera_label(slot.role, slot.label)
+                if slot.serial:
+                    self._camera_panel.set_camera_serial(slot.role, slot.serial)
         try:
             serials = list_cameras()
         except Exception:
             serials = []
-        self._camera_panel.set_available_cameras(serials)
+        # Always advertise the three bench serials so pickers stay stable even if
+        # a camera is briefly unplugged or the SDK enumeration is flaky.
+        from config import CAMERA_ROLE_SERIALS
+
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for sn in CAMERA_ROLE_SERIALS.values():
+            if sn and sn not in seen:
+                ordered.append(sn)
+                seen.add(sn)
+        for sn in serials:
+            if sn and sn not in seen:
+                ordered.append(sn)
+                seen.add(sn)
+        self._camera_panel.set_available_cameras(ordered)
 
     def _on_camera_selection_changed(self, role_value: str, serial: str) -> None:
         """User picked a specific physical camera (by serial) for a bench role."""
         role = CameraRole.coerce(role_value)
-        serial = serial or None
+        serial = (serial or "").strip() or None
+        if serial and serial.lower() == "thorcam":
+            serial = None
         slot = self._cfg.camera_by_role(role)
         if slot is None:
             return
-        # Defensive: never let two roles point at the same physical camera.
-        for other_role in ACTIVE_ROLES:
-            if other_role == role:
-                continue
-            other_slot = self._cfg.camera_by_role(other_role)
-            if serial and other_slot is not None and other_slot.serial == serial:
-                other_slot.serial = None
-                self._camera_panel.set_camera_serial(other_role, "")
+        previous = slot.serial
+        # If another role already owns this serial, swap instead of clearing it
+        # to Auto — clearing left Image/Output on "first found" and caused fights.
+        if serial:
+            for other_role in ACTIVE_ROLES:
+                if other_role == role:
+                    continue
+                other_slot = self._cfg.camera_by_role(other_role)
+                if other_slot is not None and other_slot.serial == serial:
+                    other_slot.serial = previous
+                    self._cfg.camera_roles[other_role.value] = previous
+                    self._camera_panel.set_camera_serial(other_role, previous or "")
+                    break
         slot.serial = serial
+        self._cfg.camera_roles[role.value] = serial
         save_config(self._cfg)
         self._camera_panel.set_camera_serial(role, serial or "")
-        # Reconnect the affected worker on the fly if it's currently live.
+        # Reconnect on the fly only if this role is in the current live policy.
         if self._role_live.get(role) and not self._simulation_active and not self._sim2_camera_mode:
             self._stop_role_worker(role)
-            self._start_role_worker(role)
+            if role in self._live_roles():
+                self._start_role_worker(role)
+        elif self._camera_live:
+            self._reconcile_camera_workers()
         self._refresh_status()
 
     # --- Camera pop-out tiles (tear a feed into its own draggable tile) ---
@@ -1286,6 +1561,10 @@ class Dashboard(QMainWindow):
             return
         self._popout_panels[tile_id].set_pane(pane)
         self.show_tile(tile_id)
+        if self._camera_live:
+            self._reconcile_camera_workers()
+        else:
+            self._sync_camera_preview_rates()
         self._log_action(f"{role.label} camera popped out to its own tile")
 
     def _popin_camera(self, role_value: str) -> None:
@@ -1298,6 +1577,10 @@ class Dashboard(QMainWindow):
         self._popout_panels[tile_id].take_pane()
         self._camera_panel.attach_pane(role)
         self.hide_tile(tile_id)
+        if self._camera_live:
+            self._reconcile_camera_workers()
+        else:
+            self._sync_camera_preview_rates()
 
     # --- Simulation #2 (piezo closed loop, folded into the hub) ---
 
@@ -2028,31 +2311,114 @@ class Dashboard(QMainWindow):
             self._stop_camera()
             self._log_action("Live camera feed stopped")
 
-    def _grab_single_frame(self) -> None:
+    def _grab_single_frame_for_role(
+        self, role_value: str, *, from_thumb_queue: bool = False
+    ) -> None:
+        """Hardware snap for one role (frozen thumb, or manual Snap Frame)."""
         if self._simulation_active and self._simulation_last_frame is not None:
             self._on_snapshot_captured(np.asarray(self._simulation_last_frame).copy())
+            if from_thumb_queue:
+                QTimer.singleShot(0, self._advance_thumb_snap_queue)
             return
-        if self._camera_panel.current_frame() is not None:
-            self._camera_panel._snap_frame()
+        role = CameraRole.coerce(role_value)
+        cached = self._camera_panel.role_frame(role)
+
+        # Thumb queue: keep a demoted live frame as the frozen preview (no re-grab).
+        if from_thumb_queue and cached is not None:
+            self._show_role_standby(role)
+            QTimer.singleShot(0, self._advance_thumb_snap_queue)
             return
+
+        # Manual Snap while that role is streaming: push the newest live buffer
+        # into ROI Snapshot (do not reuse a non-live frozen thumb).
+        if not from_thumb_queue and self._role_live.get(role):
+            frame = self._last_frame.get(role)
+            if frame is None:
+                frame = cached
+            if frame is not None:
+                self._ingest_role_snap(role, np.asarray(frame).copy(), to_roi=True)
+                return
+
         if self._snap_worker is not None and self._snap_worker.isRunning():
+            if from_thumb_queue and role not in self._pending_thumb_snaps:
+                self._pending_thumb_snaps.insert(0, role)
             return
-        self._update_telemetry(status="Capturing single frame…")
-        self._camera_panel.set_snap_busy(True)
-        self._snap_worker = SnapWorker(self._cfg.camera_serial, self)
+        serial = self._serial_for_role(role)
+        if not serial:
+            if from_thumb_queue:
+                self._camera_panel.show_role_status(
+                    role, f"{role.label}\n\nNo serial assigned"
+                )
+                QTimer.singleShot(0, self._advance_thumb_snap_queue)
+            else:
+                self._show_error(f"No serial assigned for {role.label}.")
+            return
+        self._snap_role = role
+        self._snap_from_thumb_queue = from_thumb_queue
+        self._update_telemetry(status=f"Capturing {role.label}…")
+        if not from_thumb_queue:
+            self._camera_panel.set_snap_busy(True)
+        settings = self._camera_panel.stored_camera_settings(role)
+        payload: dict = {}
+        if settings.get("exposure_us") is not None:
+            payload["exposure_us"] = settings["exposure_us"]
+        if role in (CameraRole.IMAGE, CameraRole.OUTPUT):
+            ui_exp = float(settings.get("exposure_us") or 0)
+            ff_exp = float(self._last_exp_us.get(CameraRole.FAR_FIELD, 0))
+            if ff_exp > 0 and ui_exp <= 15_000:
+                payload["exposure_us"] = ff_exp
+        if settings.get("fps_auto") is not None:
+            payload["fps_auto"] = settings["fps_auto"]
+            if not settings.get("fps_auto") and settings.get("fps_hz"):
+                payload["fps_hz"] = settings["fps_hz"]
+        self._snap_worker = SnapWorker(serial, settings=payload, parent=self)
         self._snap_worker.frame_ready.connect(self._on_single_snap_ready)
-        self._snap_worker.error.connect(self._show_error)
+        self._snap_worker.error.connect(self._on_snap_error)
         self._snap_worker.status.connect(lambda s: self._update_telemetry(status=s[:80]))
         self._snap_worker.finished.connect(self._clear_snap_worker)
         self._snap_worker.start()
 
+    def _grab_single_frame(self) -> None:
+        """Legacy entry: snap the camera selected under Show & tune."""
+        self._grab_single_frame_for_role(self._camera_panel.settings_role().value)
+
+    def _ingest_role_snap(
+        self, role: CameraRole, frame: np.ndarray, *, to_roi: bool = False
+    ) -> None:
+        self._last_frame[role] = frame
+        self._camera_panel.set_role_frame(role, frame, repaint=True)
+        if role is CameraRole.FAR_FIELD and role != self._camera_panel.primary_role():
+            self._camera_panel.set_coupling_overlay(None, role)
+        if to_roi:
+            self._on_snapshot_captured(frame)
+
+    def _on_snap_error(self, message: str) -> None:
+        if self._snap_from_thumb_queue:
+            role = self._snap_role
+            if role is not None:
+                self._camera_panel.show_role_status(
+                    role, f"{role.label}\n\nSnap failed\n{message[:40]}"
+                )
+            self._toast.show_message(f"Thumb snap: {message}", kind="error")
+        else:
+            self._show_error(message)
+
     def _clear_snap_worker(self) -> None:
+        was_thumb = self._snap_from_thumb_queue
         self._snap_worker = None
+        self._snap_role = None
+        self._snap_from_thumb_queue = False
         self._camera_panel.set_snap_busy(False)
+        if was_thumb or self._resume_primary_after_thumbs or self._pending_thumb_snaps:
+            QTimer.singleShot(150, self._advance_thumb_snap_queue)
 
     def _on_single_snap_ready(self, frame: np.ndarray) -> None:
-        self._log_action("Single frame captured from Thorcam")
-        self._on_snapshot_captured(frame)
+        role = self._snap_role or self._camera_panel.settings_role()
+        self._log_action(
+            f"Single frame captured from {role.label} ({self._serial_for_role(role) or '?'})"
+        )
+        to_roi = not self._snap_from_thumb_queue
+        self._ingest_role_snap(role, frame, to_roi=to_roi)
 
     def _load_scan_csv(self, path: str) -> None:
         csv_path = Path(path)
@@ -2360,9 +2726,15 @@ class Dashboard(QMainWindow):
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
-            from gui.window_controls import is_maximized
+            from gui.window_controls import looks_maximized
 
-            self._chrome.set_maximized_state(is_maximized(self))
+            # Pause the decorative rail animation while minimized so it stops
+            # burning CPU behind a hidden window; resume when restored.
+            minimized = bool(self.windowState() & Qt.WindowState.WindowMinimized)
+            if hasattr(self, "_network_rail"):
+                self._network_rail.set_animation_active(not minimized)
+
+            self._chrome.set_maximized_state(looks_maximized(self))
             self._schedule_display_refresh()
 
     def resizeEvent(self, event) -> None:

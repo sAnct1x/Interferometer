@@ -82,9 +82,9 @@ class _EditableLabel(QWidget):
         layout.addWidget(self._label)
         layout.addWidget(self._edit)
         layout.addWidget(pen_btn)
-        layout.addStretch()
 
         self.set_serial(serial_hint)
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
 
     def set_serial(self, serial: str) -> None:
         tip = f"Serial: {serial}" if serial else "Serial: (not yet assigned)"
@@ -435,6 +435,7 @@ def render_frame_to_viewport(
     roi: tuple[int, int, int, int] | None = None,
     roi_mode: "RoiMode" = RoiMode.BEAM,
     tint: str | None = None,
+    max_edge: int | None = None,
 ) -> None:
     """Scale ``frame`` into ``viewport`` (optionally drawing the ROI box).
 
@@ -442,11 +443,33 @@ def render_frame_to_viewport(
     surface renders a role identically. ``tint`` colorizes a mono frame
     (currently only ``"green"``, used for simulated feeds); real hardware
     frames are never tinted.
+
+    Live preview is downscaled before QImage conversion so three 1.6 MP RGB
+    feeds do not max out the UI thread; overlay math still uses sensor pixels.
     """
-    pix, w, h = _frame_to_pixmap(frame, tint=tint)
+    from config import CAMERA_PREVIEW_MAX_EDGE_PX
+
+    edge = CAMERA_PREVIEW_MAX_EDGE_PX if max_edge is None else int(max_edge)
+    arr = np.asarray(frame)
+    sensor_h, sensor_w = arr.shape[:2]
+    preview, preview_scale = _downscale_for_preview(arr, edge)
+    draw_roi = None
     if roi is not None:
-        painter = QPainter(pix)
         x, y, rw, rh = roi
+        if preview_scale != 1.0:
+            draw_roi = (
+                int(x * preview_scale),
+                int(y * preview_scale),
+                max(1, int(rw * preview_scale)),
+                max(1, int(rh * preview_scale)),
+            )
+        else:
+            draw_roi = roi
+
+    pix, _pw, _ph = _frame_to_pixmap(preview, tint=tint)
+    if draw_roi is not None:
+        painter = QPainter(pix)
+        x, y, rw, rh = draw_roi
         color = COLOR_CYAN if roi_mode == RoiMode.BEAM else COLOR_VIOLET
         painter.setPen(QPen(color, 2))
         painter.drawRect(x, y, rw, rh)
@@ -460,13 +483,30 @@ def render_frame_to_viewport(
         Qt.AspectRatioMode.KeepAspectRatio,
         Qt.TransformationMode.FastTransformation,
     )
+    # Map sensor coordinates → widget pixels (not preview pixels).
     viewport.set_frame_pixmap(
         scaled,
-        scale=scaled.width() / w,
+        scale=scaled.width() / max(1, sensor_w),
         offset_x=int(target.x() + (target.width() - scaled.width()) / 2),
         offset_y=int(target.y() + (target.height() - scaled.height()) / 2),
-        full_size=(w, h),
+        full_size=(sensor_w, sensor_h),
     )
+
+
+def _downscale_for_preview(arr: np.ndarray, max_edge: int) -> tuple[np.ndarray, float]:
+    """Nearest-neighbor shrink for live view. Returns (preview, scale_factor)."""
+    h, w = arr.shape[:2]
+    edge = max(h, w)
+    if edge <= max_edge or max_edge <= 0:
+        return arr, 1.0
+    scale = max_edge / float(edge)
+    new_h = max(1, int(round(h * scale)))
+    new_w = max(1, int(round(w * scale)))
+    y_idx = np.linspace(0, h - 1, new_h).astype(np.int32)
+    x_idx = np.linspace(0, w - 1, new_w).astype(np.int32)
+    if arr.ndim == 2:
+        return arr[y_idx][:, x_idx], scale
+    return arr[y_idx][:, x_idx, :], scale
 
 
 _PANE_BTN_STYLE = (
@@ -495,29 +535,18 @@ class RoleCameraPane(QWidget):
         self._is_primary = True
         self._assigned_serial: str | None = None
         self._available_serials: list[str] = []
-        # The Image role has no optics wired up yet; keep its hint visible even
-        # as a thumbnail so it never looks like a dead live feed.
-        self._always_show_hint = getattr(role, "value", "") == "image"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(2)
 
+        # Row 1: role name + actions (always visible)
         head = QHBoxLayout()
         head.setSpacing(4)
         self._label = _EditableLabel(role.label, "")
-        head.addWidget(self._label)
-        cam_lbl = QLabel("Cam:")
-        cam_lbl.setStyleSheet(muted_style())
-        cam_lbl.setToolTip("Pick which physical camera feeds this role")
-        head.addWidget(cam_lbl)
-        self._cam_combo = QComboBox()
-        self._cam_combo.setStyleSheet(_FIELD_STYLE)
-        self._cam_combo.setMinimumWidth(88)
-        self._cam_combo.setToolTip("Pick which physical camera feeds this role")
-        self._cam_combo.currentIndexChanged.connect(self._on_cam_combo_changed)
-        head.addWidget(self._cam_combo)
-        head.addStretch()
+        self._label.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        head.addWidget(self._label, stretch=0)
+        head.addStretch(1)
         self._promote_btn = QPushButton("▣ view")
         self._promote_btn.setToolTip("Show this camera as the primary (large) view")
         self._promote_btn.setStyleSheet(_PANE_BTN_STYLE)
@@ -531,6 +560,22 @@ class RoleCameraPane(QWidget):
         self._popout_btn.clicked.connect(lambda: self.popout_clicked.emit(self.role.value))
         head.addWidget(self._popout_btn)
         outer.addLayout(head)
+
+        # Row 2: camera picker (full width so thumbnails don't crush the role name)
+        cam_row = QHBoxLayout()
+        cam_row.setSpacing(4)
+        self._cam_lbl = QLabel("Cam:")
+        self._cam_lbl.setStyleSheet(muted_style())
+        self._cam_lbl.setToolTip("Pick which physical camera feeds this role")
+        cam_row.addWidget(self._cam_lbl)
+        self._cam_combo = QComboBox()
+        self._cam_combo.setStyleSheet(_FIELD_STYLE)
+        self._cam_combo.setMinimumWidth(88)
+        self._cam_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._cam_combo.setToolTip("Physical Thorcam for this bench role (lab serial map)")
+        self._cam_combo.currentIndexChanged.connect(self._on_cam_combo_changed)
+        cam_row.addWidget(self._cam_combo, stretch=1)
+        outer.addLayout(cam_row)
 
         self._hint = QLabel(hint)
         self._hint.setWordWrap(True)
@@ -554,22 +599,51 @@ class RoleCameraPane(QWidget):
     # -- appearance --------------------------------------------------------
     def set_primary(self, is_primary: bool) -> None:
         self._is_primary = is_primary
-        show_hint = is_primary or self._always_show_hint
-        self._hint.setVisible(show_hint and bool(self._hint.text()))
+        show_hint = is_primary and bool(self._hint.text())
+        self._hint.setVisible(show_hint)
         self._metric_label.setVisible(is_primary and bool(self._metric_label.text()))
         self._promote_btn.setVisible(not is_primary and not self._popped)
         if is_primary:
+            self.setMinimumWidth(0)
+            self.setMinimumHeight(0)
             self.setMaximumHeight(16_777_215)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.viewport.setMinimumSize(160, 120)
+            self._cam_lbl.setVisible(True)
+            self._cam_combo.setMinimumWidth(150)
+            self._cam_combo.setMaximumWidth(16_777_215)
+            self._promote_btn.setText("▣ view")
+            self._popout_btn.setText("⤢ pop out")
+            self._label.setMinimumWidth(0)
         else:
-            self.setMaximumHeight(190)
-            # Smaller than the primary minimum, but never zero - a thumbnail
-            # should always show a recognizable (if small) picture.
-            self.viewport.setMinimumSize(96, 70)
+            # Compact equal thumbs: role name never shares a row with the Cam combo,
+            # so "Image"/"Output" cannot get clipped to "Im"/"Ou".
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+            self.setMinimumWidth(0)
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16_777_215)
+            self.viewport.setMinimumSize(72, 48)
+            self._cam_lbl.setVisible(False)
+            self._cam_combo.setMinimumWidth(64)
+            self._cam_combo.setMaximumWidth(16_777_215)
+            self._promote_btn.setText("view")
+            self._popout_btn.setText("⤢")
+            # Keep enough room for the role word + pencil.
+            fm_w = self._label.fontMetrics().horizontalAdvance(self.role.label) + 28
+            self._label.setMinimumWidth(min(96, max(56, fm_w)))
+        self.updateGeometry()
+
+    def is_primary(self) -> bool:
+        return self._is_primary
 
     def set_popped(self, popped: bool) -> None:
         self._popped = popped
-        self._popout_btn.setText("⤡ pop in" if popped else "⤢ pop out")
+        if popped:
+            self._popout_btn.setText("⤡ pop in")
+        elif self._is_primary:
+            self._popout_btn.setText("⤢ pop out")
+        else:
+            self._popout_btn.setText("⤢")
         self._popout_btn.setToolTip(
             "Return this camera to the Bench Cameras tile" if popped
             else "Pull this camera into its own draggable tile"
@@ -581,7 +655,9 @@ class RoleCameraPane(QWidget):
 
     def set_serial(self, serial: str) -> None:
         self._label.set_serial(serial)
-        self._assigned_serial = serial or None
+        # Ignore bogus driver placeholders so the picker never sticks on "Thorcam".
+        cleaned = (serial or "").strip()
+        self._assigned_serial = cleaned if cleaned and cleaned.lower() != "thorcam" else None
         self._rebuild_cam_combo()
 
     # -- physical camera picker --------------------------------------------
@@ -600,20 +676,52 @@ class RoleCameraPane(QWidget):
     def assigned_serial(self) -> str | None:
         return self._assigned_serial
 
+    @staticmethod
+    def _serial_option_label(serial: str) -> str:
+        """Human label for a Thorcam serial (bench role when known)."""
+        from config import CAMERA_ROLE_SERIALS
+        from core.camera_roles import CameraRole
+
+        for role_value, sn in CAMERA_ROLE_SERIALS.items():
+            if sn == serial:
+                return f"{serial} — {CameraRole.coerce(role_value).label}"
+        return serial
+
     def _rebuild_cam_combo(self) -> None:
+        """Rebuild the Cam: list: known bench serials first, no Auto option.
+
+        Auto (first found) made three roles fight over the same device. The lab
+        map in ``CAMERA_ROLE_SERIALS`` is the default; extras only appear if the
+        SDK reports something outside that map.
+        """
+        from config import CAMERA_ROLE_SERIALS
+
         self._cam_combo.blockSignals(True)
         self._cam_combo.clear()
-        self._cam_combo.addItem("Auto (first found)", "")
+        known = list(CAMERA_ROLE_SERIALS.values())
+        seen: set[str] = set()
+        options: list[str] = []
+        for s in known:
+            if s and s not in seen:
+                options.append(s)
+                seen.add(s)
         for s in self._available_serials:
-            self._cam_combo.addItem(s, s)
+            if s and s not in seen and s.lower() != "thorcam":
+                options.append(s)
+                seen.add(s)
+        if self._assigned_serial and self._assigned_serial not in seen:
+            options.append(self._assigned_serial)
+            seen.add(self._assigned_serial)
+
+        for s in options:
+            self._cam_combo.addItem(self._serial_option_label(s), s)
+
         idx = 0
         if self._assigned_serial:
             found = self._cam_combo.findData(self._assigned_serial)
-            if found < 0:
-                self._cam_combo.addItem(self._assigned_serial, self._assigned_serial)
-                found = self._cam_combo.count() - 1
-            idx = found
-        self._cam_combo.setCurrentIndex(idx)
+            if found >= 0:
+                idx = found
+        self._cam_combo.setCurrentIndex(idx if self._cam_combo.count() else -1)
         self._cam_combo.blockSignals(False)
 
     def _on_cam_combo_changed(self) -> None:
@@ -639,7 +747,7 @@ class CameraView(GlassPanel):
     """
 
     snapshot_captured = Signal(object)
-    snap_requested = Signal()
+    snap_requested = Signal(str)  # role value — hardware snap when no cached frame
     live_feed_toggled = Signal(bool)
     camera_settings_changed = Signal(object)   # dict; includes "role"
     camera_label_changed = Signal(str, str)    # (role value, new_label)
@@ -658,7 +766,7 @@ class CameraView(GlassPanel):
 
     _ROLE_HINTS: dict = {
         "far_field": "Far Field: shows how well the beam lines up with the fiber opening (450 µm target)",
-        "image": "Image: not wired up yet, waiting on the optics layout",
+        "image": "Image (Ghost 2): live Thorcam near the fiber plane — shows whatever the sensor sees (thin-lens placement is bench math only, not required here)",
         "output": "Output: light after the fiber, used to measure efficiency (η)",
     }
 
@@ -707,20 +815,19 @@ class CameraView(GlassPanel):
         self._thumb_row = QHBoxLayout(self._thumb_holder)
         self._thumb_row.setContentsMargins(0, 0, 0, 0)
         self._thumb_row.setSpacing(8)
-        # Opt out of HubTile's minimum-size relaxation (gui/hub_tile.py) so the
-        # thumbnail strip can never be squeezed to zero height by the primary
-        # pane's stretch factor.
+        # Opt out of HubTile's minimum-size relaxation so the strip cannot be
+        # crushed to a clipped stub under the primary pane.
         self._thumb_holder._preserve_min_size = True
-        # Header row (~28px) + hint (Image only) + a legible viewport (>=70px)
-        # + layout spacing; 96px was tight enough that the viewport lost out
-        # to the header's whitelisted combo/buttons entirely.
-        self._thumb_holder.setMinimumHeight(px(112, get_scale()))
+        self._thumb_holder.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._apply_thumb_strip_height()
 
         vp = QVBoxLayout()
         vp.setContentsMargins(0, 0, 0, 0)
         vp.setSpacing(6)
         vp.addWidget(self._primary_holder, stretch=1)
-        vp.addWidget(self._thumb_holder)
+        vp.addWidget(self._thumb_holder, stretch=0)
         layout.addLayout(vp, stretch=1)
 
         self._sync_primary_combo()
@@ -772,13 +879,18 @@ class CameraView(GlassPanel):
     def _build_settings_row(self):
         r2 = QHBoxLayout()
         r2.setSpacing(6)
-        settings_lbl = QLabel("Settings:")
+        settings_lbl = QLabel("Show & tune:")
+        settings_lbl.setToolTip(
+            "Switch the large primary view and edit exposure/FPS for that camera"
+        )
         settings_lbl.setStyleSheet(muted_style())
         r2.addWidget(settings_lbl)
         self._role_btns: dict = {}
         for role in self._roles:
             btn = BracketButton(role.label, compact=True)
-            btn.setToolTip(f"Edit exposure, FPS, and white balance for {role.label}")
+            btn.setToolTip(
+                f"Show {role.label} large and edit its exposure, FPS, and white balance"
+            )
             btn.clicked.connect(lambda _=False, rr=role: self._select_settings_role(rr))
             self._role_btns[role] = btn
             r2.addWidget(btn)
@@ -870,6 +982,14 @@ class CameraView(GlassPanel):
         return self._wb_row_widget
 
     # ── Pane layout / primary + thumbnails ────────────────────────────────
+    def _thumb_strip_height(self) -> int:
+        """Fixed height for the equal micro-tile row (fits compact chrome + viewport)."""
+        return max(132, px(148, get_scale()))
+
+    def _apply_thumb_strip_height(self) -> None:
+        h = self._thumb_strip_height()
+        self._thumb_holder.setFixedHeight(h)
+
     def _docked_roles(self) -> list:
         return [r for r in self._roles if r not in self._popped]
 
@@ -895,11 +1015,13 @@ class CameraView(GlassPanel):
         primary.show()
 
         thumbs = [r for r in docked if r != self._primary_role]
-        for role in thumbs:
+        self._apply_thumb_strip_height()
+        for i, role in enumerate(thumbs):
             pane = self._panes[role]
             pane.set_primary(False)
             pane.setParent(self._thumb_holder)
             self._thumb_row.addWidget(pane, stretch=1)
+            self._thumb_row.setStretch(i, 1)
             pane.show()
         self._thumb_holder.setVisible(bool(thumbs))
         self._sync_primary_combo()
@@ -923,10 +1045,20 @@ class CameraView(GlassPanel):
         data = self._primary_combo.currentData()
         if data is None:
             return
-        self.set_primary_role(self._CameraRole.coerce(data))
+        role = self._CameraRole.coerce(data)
+        self.set_primary_role(role)
+        self._select_settings_role(role, _refresh_ui=True, promote=False)
 
     def _on_promote_clicked(self, role_value: str) -> None:
-        self.set_primary_role(self._CameraRole.coerce(role_value))
+        role = self._CameraRole.coerce(role_value)
+        self.set_primary_role(role)
+        self._select_settings_role(role, _refresh_ui=True, promote=False)
+
+    def primary_role(self):
+        return self._primary_role
+
+    def settings_role(self):
+        return self._settings_role
 
     def set_primary_role(self, role) -> None:
         if role in self._popped or role not in self._roles:
@@ -972,7 +1104,11 @@ class CameraView(GlassPanel):
         return self._panes.get(role)
 
     # ── Settings selector ────────────────────────────────────────────────
-    def _select_settings_role(self, role, *, _refresh_ui: bool = True) -> None:
+    def _select_settings_role(
+        self, role, *, _refresh_ui: bool = True, promote: bool = True
+    ) -> None:
+        if promote and role not in self._popped:
+            self.set_primary_role(role)
         self._settings_role = role
         active = ("QPushButton { background: rgba(168,85,247,0.4); "
                   "border: 1px solid " + NEON_CYAN + "; color: " + NEON_CYAN + "; }")
@@ -1063,14 +1199,31 @@ class CameraView(GlassPanel):
             pane = self._panes.get(role)
             if pane is None:
                 continue
-            if role.value == "image":
+            if role == self._primary_role:
                 pane.viewport.set_idle(
-                    "Image view\n\nNot wired up yet\n(waiting on the optics layout)"
+                    f"{role.label}\n\nStart Live Feed for continuous stream."
                 )
-            elif role == self._primary_role:
-                pane.viewport.set_idle(f"{role.label}\n\nStart live feed or snap a frame.")
             else:
-                pane.viewport.set_idle(f"{role.label}\n\nNot active")
+                pane.viewport.set_idle(f"{role.label}\nFrozen snap")
+
+    def show_role_status(self, role, text: str) -> None:
+        """Show a status/idle message on one role without clearing other feeds."""
+        role = self._CameraRole.coerce(role)
+        pane = self._panes.get(role)
+        if pane is None:
+            return
+        # Keep thumbnail messages to a couple of lines so they aren't clipped.
+        if not pane.is_primary() and role not in self._popped:
+            lines = [ln for ln in str(text).splitlines() if ln.strip()]
+            text = "\n".join(lines[:2]) if lines else str(text)
+        pane.viewport.set_idle(text)
+
+    def show_role_error(self, role, message: str) -> None:
+        role = self._CameraRole.coerce(role)
+        self._frames[role] = None
+        pane = self._panes.get(role)
+        if pane is not None:
+            pane.viewport.set_idle(f"{role.label}\n\n{message}")
 
     # ── ROI / mode ─────────────────────────────────────────────────────────
     def set_roi(self, roi: tuple[int, int, int, int], mode: RoiMode | None = None) -> None:
@@ -1104,11 +1257,13 @@ class CameraView(GlassPanel):
         return self._frames.get(self._CameraRole.coerce(role))
 
     def _snap_frame(self) -> None:
-        frame = self._frames.get(self._settings_role) or self._frames.get(self._primary_role)
-        if frame is None:
-            self.snap_requested.emit()
-            return
-        self.snapshot_captured.emit(np.asarray(frame).copy())
+        """Snap the large primary view into ROI Snapshot.
+
+        Always asks the dashboard so it can use the newest live buffer or do an
+        exclusive hardware grab — never recycle a frozen thumbnail in-place
+        (that left ROI Snapshot stuck on the previous image).
+        """
+        self.snap_requested.emit(self._primary_role.value)
 
     def set_role_frame(self, role, frame: np.ndarray, *, repaint: bool = True) -> None:
         role = self._CameraRole.coerce(role)
@@ -1130,10 +1285,29 @@ class CameraView(GlassPanel):
         pane = self._panes.get(role)
         if frame is None or pane is None:
             return
+        from config import CAMERA_PREVIEW_MAX_EDGE_PX, CAMERA_THUMB_PREVIEW_MAX_EDGE_PX
+
         far = self._CameraRole.coerce("far_field")
         roi = self._rois.get(role) if role == far else None
         tint = "green" if self._simulation_feed else None
-        render_frame_to_viewport(pane.viewport, frame, roi=roi, roi_mode=self._mode, tint=tint)
+        # Thumbnails are tiny — decode/scale a much smaller preview.
+        edge = (
+            CAMERA_PREVIEW_MAX_EDGE_PX
+            if pane.is_primary() or role in self._popped
+            else CAMERA_THUMB_PREVIEW_MAX_EDGE_PX
+        )
+        render_frame_to_viewport(
+            pane.viewport, frame, roi=roi, roi_mode=self._mode, tint=tint, max_edge=edge
+        )
+
+    def preview_tier(self, role) -> str:
+        """Return ``primary``, ``popout``, or ``thumb`` for adaptive worker rates."""
+        role = self._CameraRole.coerce(role)
+        if role in self._popped:
+            return "popout"
+        if role == self._primary_role:
+            return "primary"
+        return "thumb"
 
     def set_coupling_overlay(self, overlay: dict | None, role=None) -> None:
         role = self._CameraRole.coerce("far_field") if role is None else self._CameraRole.coerce(role)
@@ -1147,6 +1321,11 @@ class CameraView(GlassPanel):
             pane.set_metric(text)
 
     # ── Camera settings (hardware readback + UI emit) ────────────────────────
+    def stored_camera_settings(self, role) -> dict:
+        """Last known exposure/FPS state for a role (used when starting workers)."""
+        role = self._CameraRole.coerce(role)
+        return dict(self._cam_state.get(role, {}))
+
     def set_camera_settings(self, settings: dict, role=None) -> None:
         role = self._settings_role if role is None else self._CameraRole.coerce(role)
         s = self._cam_state.get(role)

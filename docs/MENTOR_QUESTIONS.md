@@ -61,6 +61,8 @@ Bring this list tomorrow. Skip anything you've already settled in lab notes.
 16. How many Thorcam units are on the bench at once: three dedicated cameras (Far Field, Image, Output), or fewer sensors swapped between roles?
 
 17. Do you have serial numbers or fixed USB slots assigned to each camera role?
+    **Answered:** Far Field `36158`, Image `38173`, Output `36143`
+    (see `CAMERA_ROLE_SERIALS` in `config.py`).
 
 18. Is the interferometer / fringe ROI / wavelength-scan workflow still part of this bench, or is this setup purely fiber coupling and we can drop fringe-first UI?
 

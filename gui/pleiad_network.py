@@ -45,6 +45,7 @@ class PleiadNetwork:
             for _ in range(node_count)
         ]
         self._link_dist = 0.68
+        self._link_dist_sq = self._link_dist * self._link_dist
         self._yaw = 0.0
         self._x_rot = 0.0
         # 0 = idle, 1 = fully active (Atria thinking / a simulation running).
@@ -215,9 +216,12 @@ class PleiadNetwork:
                 dx = n1.x - n2.x
                 dy = n1.y - n2.y
                 dz = n1.z - n2.z
-                dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-                if dist >= self._link_dist:
+                # Reject the far majority of pairs with a squared-distance test so
+                # sqrt only runs for pairs that actually draw a link.
+                dist_sq = dx * dx + dy * dy + dz * dz
+                if dist_sq >= self._link_dist_sq:
                     continue
+                dist = math.sqrt(dist_sq)
                 t_dist = dist / self._link_dist
                 mid_y = (y1 + y2) * 0.5
                 grad_t = mid_y / max(1.0, bounds_h)

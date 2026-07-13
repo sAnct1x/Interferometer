@@ -3,8 +3,9 @@
 The bench splits the main beam at the wedge into three diagnostic paths:
 
 * ``FAR_FIELD`` - ghost reflected off the wedge, samples the beam ~500 mm out.
-* ``IMAGE``     - second ghost (Ghost 2), images a plane near the fiber (optics
-                  still pending mentor spec, see ``docs/MENTOR_QUESTIONS.md``).
+* ``IMAGE``     - second ghost (Ghost 2), live Thorcam near the fiber plane.
+                  Thin-lens placement math is still pending mentor optics
+                  (see ``docs/MENTOR_QUESTIONS.md``); the live feed itself is active.
 * ``OUTPUT``    - camera after the fiber, measures transmitted power for eta.
 
 The historical two-camera build used generic ``input``/``output`` slots; those

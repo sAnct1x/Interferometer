@@ -163,6 +163,11 @@ class HubTile(QWidget):
             child.setMouseTracking(True)
             child.installEventFilter(self)
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.bring_to_front()
+        super().mousePressEvent(event)
+
     def _event_on_tile(self, obj) -> bool:
         panel = self._panel()
         header = self._header()
@@ -316,6 +321,13 @@ class HubTile(QWidget):
             self._dashboard.snap_tile_to_grid(self.tile_id)
 
     def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.ChildAdded:
+            child = event.child()
+            if isinstance(child, QWidget) and child is not self._header():
+                child.setMouseTracking(True)
+                child.installEventFilter(self)
+            return super().eventFilter(obj, event)
+
         if not self._event_on_tile(obj):
             return super().eventFilter(obj, event)
 
@@ -360,6 +372,11 @@ class HubTile(QWidget):
             return super().eventFilter(obj, event)
 
         if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            # Any click on this tile (header, body, or child control) brings it
+            # above overlapping tiles. Do not consume the event unless we start
+            # a drag/resize — buttons and plots still need their own clicks.
+            self.bring_to_front()
+
             tile_pos = self._mouse_event_tile_pos(obj, event)
             edge = self._hit_test_resize(tile_pos)
             if edge is not None and not is_header:
@@ -369,7 +386,6 @@ class HubTile(QWidget):
                 self._resize_start = self.geometry()
                 self._resize_origin = event.globalPosition().toPoint()
                 obj.grabMouse()
-                self.raise_()
                 return True
 
             if is_header and self._header_drag_zone(header, event.position().toPoint()):
@@ -383,7 +399,6 @@ class HubTile(QWidget):
                 self._drag_pos = event.globalPosition().toPoint() - self.mapToGlobal(QPoint(0, 0))
                 self._dragging = False
                 header.grabMouse()
-                self.raise_()
                 return True
 
             return super().eventFilter(obj, event)
@@ -438,7 +453,15 @@ class HubTile(QWidget):
 
         if panel_header is not None:
             panel_header.set_maximized_state(self._workspace_maximized)
+        self.bring_to_front()
+
+    def bring_to_front(self) -> None:
+        """Stack this tile above siblings so overlapped panels become reachable."""
         self.raise_()
+        # Keep glass header chrome above the panel body after z-order changes.
+        header = self._header()
+        if header is not None:
+            header.raise_()
 
     def _hub_shutting_down(self) -> bool:
         return bool(getattr(self._dashboard, "_shutting_down", False))

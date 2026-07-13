@@ -25,6 +25,17 @@ PIXEL_SIZE_UM = 3.45
 SENSOR_SIZE_PX = (1440, 1080)
 DEFAULT_CAMERA_SERIAL: str | None = os.getenv("CAMERA_SERIAL") or None
 
+# Fixed bench assignments (Thorlabs CS165CU serial numbers).
+# Camera 1 → Far Field, Camera 2 → Image (Ghost 2), Camera 3 → Output (η).
+CAMERA_SERIAL_FAR_FIELD = "36158"
+CAMERA_SERIAL_IMAGE = "38173"
+CAMERA_SERIAL_OUTPUT = "36143"
+CAMERA_ROLE_SERIALS: dict[str, str] = {
+    "far_field": CAMERA_SERIAL_FAR_FIELD,
+    "image": CAMERA_SERIAL_IMAGE,
+    "output": CAMERA_SERIAL_OUTPUT,
+}
+
 # Green laser diode (nominal)
 LASER_WAVELENGTH_NM = 520.0
 
@@ -92,6 +103,30 @@ APP_BADGE = "IA"
 CAMERA_POLL_MS = 5
 CAMERA_FRAME_WAIT_S = 0.2
 CAMERA_SETTLE_S = 2.0
+# Longer wait while hunting for the first frame after connect (USB contention).
+CAMERA_BOOTSTRAP_FRAME_WAIT_S = 1.0
+# If a camera connects and starts acquisition but delivers no frames within this
+# window, the worker warns the UI so a dark/mis-exposed sensor is not mistaken for
+# a connection hang (a tile stuck on "Connecting to <serial>…").
+CAMERA_NO_FRAME_WARN_S = 4.0
+# Cap how often each worker pushes frames into the Qt GUI queue. Three CS165CUs at
+# ~35 fps × full RGB will otherwise flood the main thread (~100+ queued arrays/s)
+# and freeze the UI while RAM climbs. Sensor acquisition still runs; extras are dropped.
+CAMERA_UI_FPS = 12.0
+# Popped-out camera tiles: watched, but not the main alignment surface.
+CAMERA_POPOUT_FPS = 4.0
+# Non-primary thumbnail cameras: keep the device open, but only refresh the
+# preview on this period (seconds). Huge USB/CPU win vs streaming three live feeds.
+CAMERA_THUMB_PERIOD_S = 30.0
+# Downscale live preview before QPixmap conversion (analytics still use full frames).
+CAMERA_PREVIEW_MAX_EDGE_PX = 720
+# Even smaller preview for thumbnail tiles.
+CAMERA_THUMB_PREVIEW_MAX_EDGE_PX = 320
+
+# Which cameras stream during "Start Live Feed" (see core/camera_live_policy.py).
+# Production rule: primary (large) pane is live; the other two tiles are one frozen
+# snap each. Keep this on "single".
+CAMERA_LIVE_POLICY = "single"
 
 # CS165CU is a Bayer color sensor. pylablib debayers on-device to RGB when asked.
 # "srgb" yields perceptually realistic color for the live view; beam measurements are

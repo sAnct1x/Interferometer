@@ -26,6 +26,23 @@ class HoloBackground(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._grid_pens: dict | None = None
+
+    def _get_grid_pens(self) -> dict:
+        """Static grid pens, built once. Colors/alphas are compile-time constants,
+        so re-allocating a QPen per line on every repaint was pure waste."""
+        if self._grid_pens is None:
+            def pen(color: QColor, alpha: int) -> QPen:
+                return QPen(QColor(color.red(), color.green(), color.blue(), alpha), 1)
+
+            self._grid_pens = {
+                "cyan_major": pen(COLOR_CYAN, GRID_MAJOR_ALPHA),
+                "cyan_minor": pen(COLOR_CYAN, GRID_MINOR_ALPHA),
+                "pink_major": pen(COLOR_PINK, GRID_MAJOR_ALPHA),
+                "pink_minor": pen(COLOR_PINK, GRID_MINOR_ALPHA),
+                "axis": pen(COLOR_CYAN, GRID_MAJOR_ALPHA + 12),
+            }
+        return self._grid_pens
 
     def _workspace_bounds(self) -> QRectF:
         """Paintable workspace aligned with tile layout (right of hex rail)."""
@@ -53,14 +70,14 @@ class HoloBackground(QWidget):
 
         cell = grid_cell_px()
         bw = int(bounds.width())
+        pens = self._get_grid_pens()
 
         for i in range(0, bw // cell + 2):
             x = ox + i * cell
             if x > w:
                 break
             is_major = (i % GRID_MAJOR_EVERY) == 0
-            alpha = GRID_MAJOR_ALPHA if is_major else GRID_MINOR_ALPHA
-            painter.setPen(QPen(QColor(COLOR_CYAN.red(), COLOR_CYAN.green(), COLOR_CYAN.blue(), alpha), 1))
+            painter.setPen(pens["cyan_major"] if is_major else pens["cyan_minor"])
             painter.drawLine(x, 0, x, h)
 
         for j in range(0, h // cell + 2):
@@ -68,13 +85,10 @@ class HoloBackground(QWidget):
             if y > h:
                 break
             is_major = (j % GRID_MAJOR_EVERY) == 0
-            alpha = GRID_MAJOR_ALPHA if is_major else GRID_MINOR_ALPHA
-            painter.setPen(QPen(QColor(COLOR_PINK.red(), COLOR_PINK.green(), COLOR_PINK.blue(), alpha), 1))
+            painter.setPen(pens["pink_major"] if is_major else pens["pink_minor"])
             painter.drawLine(ox, y, w, y)
 
-        painter.setPen(
-            QPen(QColor(COLOR_CYAN.red(), COLOR_CYAN.green(), COLOR_CYAN.blue(), GRID_MAJOR_ALPHA + 12), 1)
-        )
+        painter.setPen(pens["axis"])
         painter.drawLine(ox, 0, ox, h)
 
     def paintEvent(self, event) -> None:
