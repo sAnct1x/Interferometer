@@ -1,9 +1,9 @@
 # Bench constants (520 nm wedge fiber-coupling)
 
 Single source of truth is `config.py`; this file explains each value and its
-origin. Everything is simulation-first: no piezo, amplifier, Teensy, or cameras
-exist yet, so treat hardware numbers as design targets from the Piezo Stack
-Report until measured on the bench.
+origin. Cameras and the Teensy 4.1 + DAC8562 path are on the bench.
+The HV amp and PK2JA2P1 stacks are not connected yet — stack voltages below
+are still design targets from the Piezo Stack Report.
 
 ## Optical
 
@@ -31,6 +31,42 @@ Two single-axis stacks replace two adjuster screws of the Newport **U100-A**
 ULTIMA mount (tip θx, tilt θy), driven by a 2-channel DAC8562 → HV amp. Alignment
 is a **PID on centroid error**, not open-loop hill climbing (hysteresis + creep
 make absolute positioning unreliable; see the Piezo Stack Report).
+
+## Teensy 4.1 + Zonri DAC8562 (bring-up 2026-08-26)
+
+Firmware: `firmware/teensy41_piezo` (v0.4.0). USB Serial on **COM5**, board
+serial `20022040` (`VID_16C0` `PID_0483`). Host class
+`SerialPiezoDriver` is still a stub.
+
+Verified on the bench: bit-bang SPI, internal 2.5 V ref, gain = 1, both
+channels track SET. DMM: OUTA 1.00 V and OUTB 2.00 V after `TEST`.
+
+### Wiring (leave this up)
+
+| Teensy 4.1 | DAC8562 |
+|---|---|
+| GND | GND |
+| 3.3V | VCC / AVDD (not 5 V — Teensy I/O is not 5 V tolerant) |
+| 11 | DIN |
+| 13 | SCLK |
+| 10 | SYNC |
+| (jumper on DAC only) | LDAC → DAC GND |
+| (jumper on DAC only) | CLR → DAC VCC |
+
+### DAC output voltages — do not mix these up
+
+`SET` millivolts are **DAC analog out**, 0..2500 (full scale 2.5 V). They are
+**not** stack volts. The HV amp is what will scale 0..2.5 V → 0..75 V later.
+
+| State | OUTA | OUTB | When |
+|-------|------|------|------|
+| **Park (boot / STOP / CLR)** | 0 V | 0 V | Default now. Safe with no amp/stacks. |
+| **Mid-bias (next, after HV amp)** | 1.25 V | 1.25 V | Maps to 37.5 V / +4 µm on each PK2JA2P1. |
+| **Bring-up TEST** | 1.00 V | 2.00 V | Serial `TEST`. Proves the two channels are independent. |
+
+Next session: implement `SerialPiezoDriver` against COM5, then the HV amp.
+Do not connect the stacks until park = 0 V on the DAC means 0 V on the amp
+output, and mid-bias is measured at 37.5 V.
 
 ### Derived (from the constants above)
 - Piezo authority: ±4 µm over a 15 mm arm ≈ ±267 µrad mechanical → ±533 µrad beam

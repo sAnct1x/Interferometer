@@ -1,8 +1,8 @@
 """Interface for the tip/tilt piezo actuator on Mirror 5.
 
-Signal chain (Phase 1 roadmap): GUI -> serial -> Teensy 4.1 -> DAC8562 -> HV amp
--> PK2JA2P1 stack. The GUI and PID loop only ever see this interface, so the
-simulated driver and the future serial driver are interchangeable.
+Signal chain: GUI -> serial -> Teensy 4.1 -> DAC8562 -> HV amp -> PK2JA2P1.
+Teensy + DAC8562 are on the bench; the HV amp is not. The GUI and PID only
+see this interface, so SimPiezoDriver and SerialPiezoDriver stay interchangeable.
 
 Two channels model the two tilt axes of the stack. Voltages are clamped to
 ``[0, PIEZO_MAX_V]`` by the concrete driver.
