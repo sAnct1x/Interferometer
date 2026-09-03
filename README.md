@@ -67,10 +67,12 @@ tile to snap it back):
 - **Output**: after the fiber; transmitted power for coupling efficiency η
   (η is computed Far Field → Output).
 
-Alignment uses two simulated **PK2JA2P1** piezo stacks (tip/tilt) on a Newport
+Alignment uses two **PK2JA2P1** piezo stacks (tip/tilt) on a Newport
 **U100-A** mount at Mirror 5, driven by a **PID** loop on centroid error (not
-open-loop hill climbing). Constants live in `config.py`; see
-`docs/BENCH_CONSTANTS.md`. No piezo hardware exists yet, everything runs in
+open-loop hill climbing). The HV amp on the bench is a Newport **NPC3**
+(S/N E-707744); Teensy + DAC8562 are wired, stacks are not. Constants live in
+`config.py`; hookup and the 2.5 V vs 10 V analog gap are in
+`docs/NPC3_DAC_HOOKUP.md` and `docs/BENCH_CONSTANTS.md`. The GUI still runs in
 simulation behind the `PiezoDriver` interface (`core/hardware/piezo_driver.py`).
 
 ## Simulation #1 vs Simulation #2

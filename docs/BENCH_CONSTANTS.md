@@ -2,8 +2,9 @@
 
 Single source of truth is `config.py`; this file explains each value and its
 origin. Cameras and the Teensy 4.1 + DAC8562 path are on the bench.
-The HV amp and PK2JA2P1 stacks are not connected yet — stack voltages below
-are still design targets from the Piezo Stack Report.
+The HV amp is the **Newport NPC3** (S/N E-707744, open-loop, −20…+130 V).
+PK2JA2P1 stacks are not connected yet — see `docs/NPC3_DAC_HOOKUP.md`.
+Stack voltages below are still design targets from the Piezo Stack Report.
 
 ## Optical
 
@@ -28,7 +29,7 @@ are still design targets from the Piezo Stack Report.
 | `PIEZO_PIVOT_ARM_MM` | 15.0 | Actuator-to-pivot distance on the U100-A (report value; refine when measured) |
 
 Two single-axis stacks replace two adjuster screws of the Newport **U100-A**
-ULTIMA mount (tip θx, tilt θy), driven by a 2-channel DAC8562 → HV amp. Alignment
+ULTIMA mount (tip θx, tilt θy), driven by a 2-channel DAC8562 → **NPC3**. Alignment
 is a **PID on centroid error**, not open-loop hill climbing (hysteresis + creep
 make absolute positioning unreliable; see the Piezo Stack Report).
 
@@ -36,7 +37,8 @@ make absolute positioning unreliable; see the Piezo Stack Report).
 
 Firmware: `firmware/teensy41_piezo` (v0.4.0). USB Serial on **COM5**, board
 serial `20022040` (`VID_16C0` `PID_0483`). Host class
-`SerialPiezoDriver` is still a stub.
+`SerialPiezoDriver` is still a stub. Analog NPC3 hookup:
+`docs/NPC3_DAC_HOOKUP.md`.
 
 Verified on the bench: bit-bang SPI, internal 2.5 V ref, gain = 1, both
 channels track SET. DMM: OUTA 1.00 V and OUTB 2.00 V after `TEST`.
@@ -56,17 +58,24 @@ channels track SET. DMM: OUTA 1.00 V and OUTB 2.00 V after `TEST`.
 ### DAC output voltages — do not mix these up
 
 `SET` millivolts are **DAC analog out**, 0..2500 (full scale 2.5 V). They are
-**not** stack volts. The HV amp is what will scale 0..2.5 V → 0..75 V later.
+**not** stack volts and they are **not** NPC3 MOD volts.
+
+The NPC3 analog input is 0..10 V. Open loop: `V_piezo = -20 + 15 × V_mod`.
+Direct-wiring today's 0..2.5 V DAC into MOD tops out at **17.5 V** on the stack
+and today's 0 V park becomes **−20 V** (fatal for a PK2JA2P1). A ×4 scaler
+(or digital `set` on USB/RS-232) is required before any stack is attached.
+Helpers: `core/hardware/npc3_map.py`. Full pinout and bring-up:
+`docs/NPC3_DAC_HOOKUP.md`.
 
 | State | OUTA | OUTB | When |
 |-------|------|------|------|
-| **Park (boot / STOP / CLR)** | 0 V | 0 V | Default now. Safe with no amp/stacks. |
-| **Mid-bias (next, after HV amp)** | 1.25 V | 1.25 V | Maps to 37.5 V / +4 µm on each PK2JA2P1. |
+| **Park (boot / STOP / CLR)** | 0 V | 0 V | Default now. Safe with no amp/stacks. **Unsafe** on the NPC3 analog input. |
+| **Mid-bias (after ×4 scaler)** | 0.958 V | 0.958 V | Maps to MOD 3.833 V → 37.5 V / +4 µm. Unreachable without a scaler. |
 | **Bring-up TEST** | 1.00 V | 2.00 V | Serial `TEST`. Proves the two channels are independent. |
 
-Next session: implement `SerialPiezoDriver` against COM5, then the HV amp.
-Do not connect the stacks until park = 0 V on the DAC means 0 V on the amp
-output, and mid-bias is measured at 37.5 V.
+Next session: analog bring-up DAC → `MOD / MON` **with no stacks**, or a digital
+NPC3 driver. Do not connect the stacks until park means 0 V on the NPC3 output
+and mid-bias is measured at 37.5 V.
 
 ### Derived (from the constants above)
 - Piezo authority: ±4 µm over a 15 mm arm ≈ ±267 µrad mechanical → ±533 µrad beam

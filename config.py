@@ -75,6 +75,15 @@ PIEZO_EXPANSION_UM_PER_V = 0.106    # datasheet expansion rate
 PIEZO_PIVOT_ARM_MM = 15.0           # actuator-to-pivot distance on the U100-A mount
 PIEZO_STACK_MODEL = "PK2JA2P1"
 MIRROR_MOUNT_MODEL = "Newport U100-A"
+# HV amp on the bench: Newport NPC3 open-loop, S/N E-707744 (loaner, UCF).
+# Analog MOD is 0..10 V; open-loop map is V_piezo = -20 + 15*V_mod.
+# DAC8562 is still 0..2.5 V — see docs/NPC3_DAC_HOOKUP.md and npc3_map.py.
+PIEZO_AMP_MODEL = "Newport NPC3"
+PIEZO_AMP_SERIAL = "E-707744"
+NPC3_V_MIN = -20.0
+NPC3_V_MAX = 130.0
+NPC3_MOD_FS = 10.0
+DAC_FS_V = 2.5
 
 # Camera: Thorlabs CS165CU (Zelux 1.6 MP color CMOS). 10-bit ADC, global
 # shutter, ~34.8 fps full frame. Read noise < 4 e-. Used to make the simulated

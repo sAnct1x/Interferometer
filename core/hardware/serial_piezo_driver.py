@@ -3,8 +3,9 @@
 Firmware lives in ``firmware/teensy41_piezo`` and speaks this protocol today.
 This Python class is still a stub — wire it to COM5 next session. SET
 millivolts are DAC output (0..2500 mV, full scale 2.5 V), not stack volts.
-Park/boot is 0 V; mid-bias after the HV amp is 1.25 V -> 37.5 V.
-See docs/BENCH_CONSTANTS.md.
+Park/boot is 0 V DAC (safe only with no NPC3 analog / no stacks).
+NPC3 open-loop analog is 0..10 V; 0 V DAC maps to -20 V on the amp.
+See docs/BENCH_CONSTANTS.md and docs/NPC3_DAC_HOOKUP.md.
 
     Host -> Teensy                 Teensy -> Host
     -------------------------      --------------------------

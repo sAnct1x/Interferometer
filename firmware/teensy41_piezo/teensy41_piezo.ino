@@ -1,4 +1,6 @@
-// Phase 1b: bit-bang SPI to DAC8562 (breadboard-safe). No HV amp, no piezo.
+// Phase 1b: bit-bang SPI to DAC8562 (breadboard-safe). NPC3 is on the bench
+// but analog MOD is 0..10 V; this firmware still parks at 0 V DAC. Do not
+// attach PK2JA2P1 stacks until docs/NPC3_DAC_HOOKUP.md is followed.
 //
 // Wiring (Teensy 4.1 3.3 V logic, not 5 V tolerant):
 //   GND  -> DAC GND
