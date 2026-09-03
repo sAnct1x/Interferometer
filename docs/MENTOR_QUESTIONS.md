@@ -49,6 +49,7 @@ Bring this list tomorrow. Skip anything you've already settled in lab notes.
 12. Are we still using the K-Cube linear stage for anything on this bench, or is alignment entirely piezo tilt now?
 
 13. From the amplifier options in the report (KPZ101, Apex PA94, PDL200), which one are we actually building with? That affects voltage range, channels, and how the GUI should talk to hardware.
+    **Answered (bench, 2026-09-03):** Newport **NPC3** S/N **E-707744** (open-loop, −20…+130 V, 3 ch). Analog MOD is 0…10 V; DAC8562 is still 0…2.5 V. See `docs/NPC3_DAC_HOOKUP.md`.
 
 14. Is there existing Teensy firmware and a serial command format, or does that need to be defined from scratch?
 

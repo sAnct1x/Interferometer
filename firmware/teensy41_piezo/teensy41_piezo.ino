@@ -1,4 +1,6 @@
-// Phase 1b: bit-bang SPI to DAC8562 (breadboard-safe). No HV amp, no piezo.
+// Phase 1b: bit-bang SPI to DAC8562 (breadboard-safe). NPC3 is on the bench
+// but analog MOD is 0..10 V; this firmware still parks at 0 V DAC. Do not
+// attach PK2JA2P1 stacks until docs/NPC3_DAC_HOOKUP.md is followed.
 //
 // Wiring (Teensy 4.1 3.3 V logic, not 5 V tolerant):
 //   GND  -> DAC GND
@@ -9,9 +11,9 @@
 //   LDAC -> DAC GND (jumper on the module)
 //   CLR  -> DAC VCC (jumper on the module)
 //
-// On boot: both outputs 0 V (safe park, no HV amp / no stacks).
-// TEST = 1.000 V / 2.000 V bring-up. Mid-bias later is 1.25 V / 1.25 V
-// (37.5 V after the amp). See docs/BENCH_CONSTANTS.md.
+// On boot: both outputs 0 V DAC. Safe with no analog lead / no stacks.
+// Wired into NPC3 MOD, 0 V DAC is -20 V on the amp — see
+// docs/WEEKEND_NPC3_GUIDE.md. TEST = 1.000 V / 2.000 V bring-up.
 
 #include <stdlib.h>
 

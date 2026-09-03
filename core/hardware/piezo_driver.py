@@ -1,8 +1,10 @@
 """Interface for the tip/tilt piezo actuator on Mirror 5.
 
-Signal chain: GUI -> serial -> Teensy 4.1 -> DAC8562 -> HV amp -> PK2JA2P1.
-Teensy + DAC8562 are on the bench; the HV amp is not. The GUI and PID only
-see this interface, so SimPiezoDriver and SerialPiezoDriver stay interchangeable.
+Signal chain: GUI -> serial -> Teensy 4.1 -> DAC8562 -> Newport NPC3 -> PK2JA2P1.
+Teensy + DAC8562 + NPC3 (E-707744) are on the bench; the stacks are not.
+Analog MOD is 0..10 V and the DAC is 0..2.5 V — see docs/NPC3_DAC_HOOKUP.md.
+The GUI and PID only see this interface, so SimPiezoDriver and
+SerialPiezoDriver stay interchangeable.
 
 Two channels model the two tilt axes of the stack. Voltages are clamped to
 ``[0, PIEZO_MAX_V]`` by the concrete driver.
