@@ -1,5 +1,9 @@
 # Connecting the DAC8562 to Newport NPC3 (S/N E-707744)
 
+**Weekend?** Start at [`WEEKEND_NPC3_GUIDE.md`](WEEKEND_NPC3_GUIDE.md) and write
+numbers into [`WEEKEND_LAB_LOG.md`](WEEKEND_LAB_LOG.md). This file is the short
+technical sheet those two expand.
+
 The bench HV amp is the **Newport NPC3** (open-loop, 3-channel, −20…+130 V,
 40 mA/ch, 24 V DC / 2.5 A). It replaces the KPZ101 / Apex PA94 / PDL200 options
 from the Piezo Stack Report. This unit is labeled **MIKE CHINI UCF** — treat it

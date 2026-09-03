@@ -11,9 +11,9 @@
 //   LDAC -> DAC GND (jumper on the module)
 //   CLR  -> DAC VCC (jumper on the module)
 //
-// On boot: both outputs 0 V (safe park, no HV amp / no stacks).
-// TEST = 1.000 V / 2.000 V bring-up. Mid-bias later is 1.25 V / 1.25 V
-// (37.5 V after the amp). See docs/BENCH_CONSTANTS.md.
+// On boot: both outputs 0 V DAC. Safe with no analog lead / no stacks.
+// Wired into NPC3 MOD, 0 V DAC is -20 V on the amp — see
+// docs/WEEKEND_NPC3_GUIDE.md. TEST = 1.000 V / 2.000 V bring-up.
 
 #include <stdlib.h>
 

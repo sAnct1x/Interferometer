@@ -37,8 +37,8 @@ make absolute positioning unreliable; see the Piezo Stack Report).
 
 Firmware: `firmware/teensy41_piezo` (v0.4.0). USB Serial on **COM5**, board
 serial `20022040` (`VID_16C0` `PID_0483`). Host class
-`SerialPiezoDriver` is still a stub. Analog NPC3 hookup:
-`docs/NPC3_DAC_HOOKUP.md`.
+`SerialPiezoDriver` is still a stub. Weekend bring-up (plain words, every
+step): `docs/WEEKEND_NPC3_GUIDE.md`. Short sheet: `docs/NPC3_DAC_HOOKUP.md`.
 
 Verified on the bench: bit-bang SPI, internal 2.5 V ref, gain = 1, both
 channels track SET. DMM: OUTA 1.00 V and OUTB 2.00 V after `TEST`.

@@ -49,6 +49,16 @@ python main.py
 - **Atria** natural-language assistant with **hardware permission** toggle
 - Dockable octagonal glass panels: drag, float, snap; layout saved in `user_config/`
 
+## Weekend piezo bring-up (NPC3)
+
+The HV amp on the bench is a loaner Newport **NPC3** (S/N E-707744). The
+Teensy + DAC8562 already whisper 0…2.5 V; the NPC3 ear wants 0…10 V and
+treats 0 V as **−20 V** on the stack. Do not attach a PK2JA2P1 until the
+weekend guide says so.
+
+Start here: [`docs/WEEKEND_NPC3_GUIDE.md`](docs/WEEKEND_NPC3_GUIDE.md)
+(lab log + voltage calculator live next to it).
+
 ## Wedge fiber-coupling bench (520 nm)
 
 See [`docs/Beam Diagram.png`](docs/Beam%20Diagram.png) for the physical beam path.

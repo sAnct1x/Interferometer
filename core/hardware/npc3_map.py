@@ -10,7 +10,7 @@ in front of MOD; 1 is a direct DAC-to-MOD lead (max stack voltage 17.5 V).
 
 PK2JA2P1 stacks must stay in ``[0, PIEZO_MAX_V]``. DAC park = 0 V maps to
 -20 V on the NPC3 — do not connect stacks at that park. See
-``docs/NPC3_DAC_HOOKUP.md``.
+``docs/WEEKEND_NPC3_GUIDE.md`` and ``docs/NPC3_DAC_HOOKUP.md``.
 """
 
 from __future__ import annotations
